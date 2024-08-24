@@ -8,7 +8,7 @@ Copyright (c) 2022 Tim Everett
 import numpy as np
 from copy import deepcopy
 from rtkcmn import uGNSS, rSIG, Eph, Geph, prn2sat, gpst2time, time2gpst, Obs, \
-                    epoch2time, timediff, timeadd, utc2gpst
+                    epoch2time, timediff, timeadd, utc2gpst, bdt2gpst
 import rtkcmn as gn
 from ephemeris import satposs
 
@@ -19,6 +19,7 @@ class rnx_decode:
     def __init__(self, cfg):
         self.ver = -1.0
         self.fobs = None
+        #self.gnss_tbl = {'G': uGNSS.GPS, 'E': uGNSS.GAL, 'R': uGNSS.GLO, 'C': uGNSS.BDS, 'J': uGNSS.QZS}
         self.gnss_tbl = {'G': uGNSS.GPS, 'E': uGNSS.GAL, 'R': uGNSS.GLO, 'C': uGNSS.BDS, 'J': uGNSS.QZS}
         self.sig_tbl = cfg.sig_tbl
         self.skip_sig_tbl = cfg.skip_sig_tbl
@@ -73,6 +74,8 @@ class rnx_decode:
                 prn = int(line[1:3])
                 if sys == uGNSS.QZS:
                     prn += 192
+                elif sys == uGNSS.BDS:
+                    prn += 140
                 sat = prn2sat(sys, prn)
                 year = int(line[4:8])
                 month = int(line[9:11])
@@ -133,9 +136,14 @@ class rnx_decode:
                     tot = int(self.flt(line, 0))
                     if len(line) >= 42:
                         eph.fit = int(self.flt(line, 1))
-    
-                    eph.toe = gpst2time(eph.week, eph.toes)
-                    eph.tot = gpst2time(eph.week, tot)
+                    if sys == uGNSS.BDS:
+                        eph.toc = bdt2gpst(toc)
+                        eph.toe = bdt2gpst(gpst2time(eph.week, eph.toes))
+                        eph.tot = bdt2gpst(gpst2time(eph.week, tot))
+                        eph.iodc = int(self.flt(line, 1))
+                    else:
+                        eph.toe = gpst2time(eph.week, eph.toes)
+                        eph.tot = gpst2time(eph.week, tot)
                     nav.eph.append(eph)
                 else:  # GLONASS
                     if prn > uGNSS.GLOMAX:
@@ -184,8 +192,7 @@ class rnx_decode:
                     geph.acc = acc * 1000
                     
                     nav.geph.append(geph)
-    
-        #nav.eph.sort(key=lambda x: x.toe.time)
+        nav.eph.sort(key=lambda x: x.toe.time)
         nav.geph.sort(key=lambda x: x.toe.time)
         return nav
 
@@ -272,7 +279,10 @@ class rnx_decode:
                 prn = int(line[1:3])
                 if sys == uGNSS.QZS:
                     prn += 192
-                obs.sat[n] = prn2sat(sys, prn)
+                elif sys == uGNSS.BDS:
+                    prn += 140
+                sat = prn2sat(sys, prn)
+                obs.sat[n] = sat
                 if obs.sat[n] == 0:
                     continue
                 nsig_max = (len(line) - 4 + 2) // 16

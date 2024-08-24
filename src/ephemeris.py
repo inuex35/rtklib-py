@@ -17,7 +17,7 @@ ERREPH_GLO = 5.0
 
 
 def seleph(nav, t, sat):
-    """ select ephemeric for sat, assume 0s ephemeris is sorted by sat, then time """
+    """ select ephemeric for sat, assume ephemeris is sorted by sat, then time """
     dt_p = 1e10 # timediff(t, nav.eph[nav.eph_index[sat]].toe)
     eph = None
     sys = sat2prn(sat)[0] 
@@ -129,7 +129,7 @@ def eph2pos(t, eph):
     y = r * np.sin(u)
     cosi = np.cos(i)
 
-    if sys == uGNSS.BDS and (prn <= 5):
+    if sys == uGNSS.BDS and (prn <= 145 or prn >= 199):
         O = eph.OMG0 + eph.OMGd * tk - omge * eph.toes
         sinO, cosO = np.sin(O), np.cos(O)
         sin5, cos5 = np.sin(5), np.cos(5)

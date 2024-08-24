@@ -80,11 +80,11 @@ class uGNSS(IntEnum):
     QZSMAX = 10
     GLOMAX = 27
     BDSMAX = 63
-    SBSMAX = 24
-    IRNMAX = 10
+    #SBSMAX = 24
+    #IRNMAX = 10
     #BDSMAX = 0
-    #SBSMAX = 0
-    #IRNMAX = 0
+    SBSMAX = 0
+    IRNMAX = 0
     NONE = -1
     MAXSAT = GPSMAX+GLOMAX+GALMAX+BDSMAX+QZSMAX+SBSMAX+IRNMAX
     
@@ -168,6 +168,7 @@ class Eph():
     f2 = 0.0
     toc = 0
     toe = 0
+    ttr = 0
     tot = 0
     week = 0
     crs = 0.0
@@ -366,6 +367,10 @@ def timediff(t1: gtime_t, t2: gtime_t):
     return dt
 
 
+def bdt2gpst(t: gtime_t) -> gtime_t:
+    """Convert BeiDou time (BDT) to GPS time (GPST)"""
+    return timeadd(t, 14.0)
+
 def gpst2time(week, tow):
     """ convert to time from gps-time """
     t = epoch2time(gpst0)
@@ -426,7 +431,7 @@ def prn2sat(sys, prn):
     elif sys == uGNSS.GAL:
         sat = prn+uGNSS.GPSMAX+uGNSS.GLOMAX
     elif sys == uGNSS.BDS:
-        sat = prn+uGNSS.GPSMAX+uGNSS.GLOMAX+uGNSS.GALMAX
+        sat = prn-140+uGNSS.GPSMAX+uGNSS.GLOMAX+uGNSS.GALMAX
     elif sys == uGNSS.QZS:
         sat = prn-192+uGNSS.GPSMAX+uGNSS.GLOMAX+uGNSS.GALMAX+uGNSS.BDSMAX
     else:
@@ -440,7 +445,7 @@ def sat2prn(sat):
         prn = sat-(uGNSS.GPSMAX+uGNSS.GLOMAX+uGNSS.GALMAX+uGNSS.BDSMAX)+192
         sys = uGNSS.QZS
     elif sat > uGNSS.GPSMAX+uGNSS.GLOMAX+uGNSS.GALMAX:
-        prn = sat-(uGNSS.GPSMAX+uGNSS.GLOMAX+uGNSS.GALMAX)
+        prn = sat-(uGNSS.GPSMAX+uGNSS.GLOMAX+uGNSS.GALMAX)+140
         sys = uGNSS.BDS
     elif sat > uGNSS.GPSMAX+uGNSS.GLOMAX:
         prn = sat-(uGNSS.GPSMAX+uGNSS.GLOMAX)
@@ -461,6 +466,10 @@ def sat2id(sat):
                 uGNSS.QZS: 'J', uGNSS.GLO: 'R'}
     if sys == uGNSS.QZS:
         prn -= 192
+    elif sys == uGNSS.BDS:
+        prn -= 140
+    elif sys == uGNSS.SBS:
+        prn -= 100
     return '%s%02d' % (gnss_tbl[sys], prn)
 
 
@@ -476,6 +485,8 @@ def id2sat(id_):
     prn = int(id_[1:3])
     if sys == uGNSS.QZS:
         prn += 192
+    elif sys == uGNSS.BDS:
+        prn += 140
     sat = prn2sat(sys, prn)
     return sat
 
