@@ -129,7 +129,7 @@ def eph2pos(t, eph):
     y = r * np.sin(u)
     cosi = np.cos(i)
 
-    if sys == uGNSS.BDS and (prn <= 5 or prn >= 59):
+    if sys == uGNSS.BDS and (prn <= 5):
         O = eph.OMG0 + eph.OMGd * tk - omge * eph.toes
         sinO, cosO = np.sin(O), np.cos(O)
         sin5, cos5 = np.sin(5), np.cos(5)

@@ -73,8 +73,6 @@ class rnx_decode:
                 prn = int(line[1:3])
                 if sys == uGNSS.QZS:
                     prn += 192
-                elif sys == uGNSS.BDS:
-                    prn += 140  # BDS PRN offset
                 sat = prn2sat(sys, prn)
                 year = int(line[4:8])
                 month = int(line[9:11])
@@ -274,8 +272,6 @@ class rnx_decode:
                 prn = int(line[1:3])
                 if sys == uGNSS.QZS:
                     prn += 192
-                elif sys == uGNSS.BDS:
-                    prn += 140  # BDS PRN offset
                 obs.sat[n] = prn2sat(sys, prn)
                 if obs.sat[n] == 0:
                     continue
