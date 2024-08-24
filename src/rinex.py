@@ -19,7 +19,7 @@ class rnx_decode:
     def __init__(self, cfg):
         self.ver = -1.0
         self.fobs = None
-        self.gnss_tbl = {'G': uGNSS.GPS, 'E': uGNSS.GAL, 'R': uGNSS.GLO, 'J': uGNSS.QZS}
+        self.gnss_tbl = {'G': uGNSS.GPS, 'E': uGNSS.GAL, 'R': uGNSS.GLO, 'C': uGNSS.BDS, 'J': uGNSS.QZS}
         self.sig_tbl = cfg.sig_tbl
         self.skip_sig_tbl = cfg.skip_sig_tbl
         self.nf = 4
@@ -37,7 +37,6 @@ class rnx_decode:
         except:
             return 0
         
-    
     def adjday(self, t, t0):
         """" adjust time considering week handover  """
         tt = timediff(t, t0)
@@ -74,6 +73,8 @@ class rnx_decode:
                 prn = int(line[1:3])
                 if sys == uGNSS.QZS:
                     prn += 192
+                elif sys == uGNSS.BDS:
+                    prn += 140  # BDS PRN offset
                 sat = prn2sat(sys, prn)
                 year = int(line[4:8])
                 month = int(line[9:11])
@@ -124,7 +125,7 @@ class rnx_decode:
                     eph.svh = int(self.flt(line, 1))
                     tgd = np.zeros(2)
                     tgd[0] = float(self.flt(line, 2))
-                    if sys == uGNSS.GAL:
+                    if sys == uGNSS.GAL or sys == uGNSS.BDS:
                         tgd[1] = float(self.flt(line, 3))
                     else:
                         eph.iodc = int(self.flt(line, 3))
@@ -186,8 +187,7 @@ class rnx_decode:
                     
                     nav.geph.append(geph)
     
-        #nav.eph.sort(key=lambda x: (x.sat, x.toe.time))
-        nav.eph.sort(key=lambda x: x.toe.time)
+        #nav.eph.sort(key=lambda x: x.toe.time)
         nav.geph.sort(key=lambda x: x.toe.time)
         return nav
 
@@ -274,6 +274,8 @@ class rnx_decode:
                 prn = int(line[1:3])
                 if sys == uGNSS.QZS:
                     prn += 192
+                elif sys == uGNSS.BDS:
+                    prn += 140  # BDS PRN offset
                 obs.sat[n] = prn2sat(sys, prn)
                 if obs.sat[n] == 0:
                     continue
@@ -383,4 +385,3 @@ def rcvstds(nav, obs):
             nav.rcvstd[s,f] = obs.Lstd[i,f] * 0.004 * 0.2
             # Pstd: 0.01*2^(n+5)
             nav.rcvstd[s,f+nav.nf] = 0.01 * (1 << (obs.Pstd[i,f] + 5))
-
