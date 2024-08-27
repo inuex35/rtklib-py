@@ -89,6 +89,7 @@ def rtkinit(cfg):
     nav.maxage = cfg.maxage
     nav.accelh = cfg.accelh
     nav.accelv = cfg.accelv
+    nav.accelw = cfg.accelw
     nav.prnbias = cfg.prnbias
     
     # ambiguity resolution
@@ -113,7 +114,11 @@ def rtkinit(cfg):
     nav.snrmax = cfg.snrmax
     nav.sig_p0 = cfg.sig_p0
     nav.sig_v0 = cfg.sig_v0
+    nav.sig_a0 = cfg.sig_a0
     nav.sig_n0 = cfg.sig_n0
+    nav.sig_w0 = cfg.sig_w0
+    nav.sig_angrate = cfg.sig_angrate
+    nav.sig_speed = cfg.sig_speed
     
     # solution parameters
     nav.sol = []
@@ -731,46 +736,117 @@ def detslp_ll(nav, obs, ix, rcv):
                   % (f, str(slipsats), str(slip[ixsat[ixL[ixslip]], f])))
     nav.slip = slip
 
-def udpos(nav, sol):
-    """ states propagation for kalman filter """
+def udpos(nav, sol, imu_data=None, speed_data=None):
+    """ Kalman filter state propagation with independent updates for GPS, IMU, and speed """
     tt = nav.tt
     trace(3, 'udpos : tt=%.3f\n' % tt)
     
     if nav.pmode == 'static':
         return
-    
-    # check variance of estimated position
-    posvar = np.sum(np.diag(nav.P[0:3])) / 3
-    if posvar > nav.sig_p0**2:
-        #reset position with large variance
-        for i in range(3):
-            initx(nav, sol.rr[i], nav.sig_p0**2, i)
-            initx(nav, 0, nav.sig_v0**2, i + 3)
-            initx(nav, 1e-6, nav.sig_v0**2, i + 6)
-        trace(2, 'reset rtk position due to large variance: var=%.3f\n' % posvar)
-        return
 
-    # state transition of position/velocity/acceleration
-    F = np.eye(nav.nx)
-    F[0:6, 3:9] += np.eye(6) * tt
-    # include accel terms if filter is converged
-    if posvar < nav.thresar1:
-        F[0:3, 6:9] += np.eye(3) * np.sign(tt) * tt**2 / 2
+    if nav.pmode != 'DR' and sol.stat > 0:
+        # DR mode: Use IMU (without acceleration) and speed data for propagation and updates
+        if imu_data is not None:
+            # IMU data processing and update
+            update_with_imu_data(nav, imu_data)
+        if speed_data is not None:
+            # Speed data processing and update
+            update_with_speed_data(nav, speed_data)
+        apply_nonholonomic_constraint(nav)
+    # Common state transition for position/velocity/acceleration
     else:
-        trace(3, 'pos var too high for accel term: %.4f\n' % posvar)
-    # x=F*x, P=F*P*F
-    nav.x = F @ nav.x
-    nav.P = F @ nav.P @ F.T
+        # Original mode: standard RTK processing
+        posvar = np.sum(np.diag(nav.P[0:3])) / 3
+        if posvar > nav.sig_p0**2:
+            # Reset position with large variance
+            for i in range(3):
+                initx(nav, sol.rr[i], nav.sig_p0**2, i)
+                initx(nav, 0, nav.sig_v0**2, i + 3)
+                initx(nav, 1e-6, nav.sig_v0**2, i + 6)
+            trace(2, 'reset rtk position due to large variance: var=%.3f\n' % posvar)
+            return
 
+        # State transition matrix for position/velocity/acceleration
+        F = np.eye(nav.nx)
+        F[0:6, 3:9] += np.eye(6) * tt
+        # Include accel terms if filter is converged
+        if posvar < nav.thresar1:
+            F[0:3, 6:9] += np.eye(3) * np.sign(tt) * tt**2 / 2
+        else:
+            trace(3, 'pos var too high for accel term: %.4f\n' % posvar)
+        
+        # Update state and covariance
+        nav.x = F @ nav.x
+        nav.P = F @ nav.P @ F.T
 
-    # process noise added to accel
-    Q = np.zeros((3,3))
-    Q[0,0] = Q[1,1] = nav.accelh**2 * abs(tt)
-    Q[2,2] = nav.accelv**2 * abs(tt)    
-    E = gn.xyz2enu(gn.ecef2pos(nav.x[0:3]))
-    Qv = E.T @ Q @ E
-    nav.P[6:9,6:9] += Qv
+        # Process noise for acceleration
+        Q = np.zeros((3,3))
+        Q[0,0] = Q[1,1] = nav.accelh**2 * abs(tt)
+        Q[2,2] = nav.accelv**2 * abs(tt)    
+        E = gn.xyz2enu(gn.ecef2pos(nav.x[0:3]))
+        Qv = E.T @ Q @ E
+        nav.P[6:9,6:9] += Qv
+
+def update_with_imu_data(nav, imu_data):
+    """ Update Kalman filter with IMU data (angular velocity only) """
+    tt = nav.tt
+    ang_rate = imu_data["angular_rate"] # IMU angular rate data
+
+    # IMU measurement update (only angular rate part)
+    H_imu = np.zeros((3, nav.nx))
+    H_imu[0:3, 12:15] = np.eye(3)  # Angular velocity part
+    v_imu = ang_rate - nav.x[12:15]  # IMU angular rate residuals
+    R_imu = np.diag([nav.sig_angrate**2] * 3)  # IMU measurement noise covariance (angular rate only)
+
+    # Kalman gain
+    K_imu = nav.P @ H_imu.T @ inv(H_imu @ nav.P @ H_imu.T + R_imu)
     
+    # State and covariance update
+    nav.x = nav.x + K_imu @ v_imu
+    nav.P = (np.eye(nav.nx) - K_imu @ H_imu) @ nav.P
+
+def update_with_speed_data(nav, speed_data):
+    """ Update Kalman filter with speed data """
+    tt = nav.tt
+    speed = speed_data  # Vehicle speed data
+
+    # Speed measurement update
+    H_speed = np.zeros((1, nav.nx))
+    H_speed[0, 3:6] = nav.x[3:6] / norm(nav.x[3:6])  # Normalize current velocity for direction
+    v_speed = np.array([speed - norm(nav.x[3:6])])  # Speed residual as 1D array
+    R_speed = nav.sig_speed**2  # Speed measurement noise variance
+
+    # Kalman gain
+    K_speed = nav.P @ H_speed.T @ inv(H_speed @ nav.P @ H_speed.T + R_speed)
+    
+    # State and covariance update
+    nav.x = nav.x + K_speed @ v_speed
+    nav.P = (np.eye(nav.nx) - K_speed @ H_speed) @ nav.P
+    
+def apply_nonholonomic_constraint(nav):
+    """ Apply nonholonomic constraint to prevent lateral movement """
+    # 非ホロノミック制約の適用
+    velocity = nav.x[3:6]
+    theta = np.arctan2(velocity[1], velocity[0])  # 速度ベクトルの方向
+    v_forward = norm(velocity[:2])  # 前進速度の大きさ
+    v_lateral = 0  # 横方向の速度はゼロにする（非ホロノミック制約）
+
+    # 車両の状態を更新して、横方向速度を制限する
+    nav.x[3] = v_forward * np.cos(theta)  # x方向の速度（前進成分のみ）
+    nav.x[4] = v_forward * np.sin(theta)  # y方向の速度（前進成分のみ）
+    nav.x[5] = 0  # z方向の速度（通常車両では地面と平行なのでゼロ）
+
+    # 制約のための観測行列
+    H_nonholo = np.zeros((1, nav.nx))
+    H_nonholo[0, 4] = 1  # 横方向速度の成分
+    v_nonholo = np.array([v_lateral - nav.x[4]])  # 非ホロノミック制約による横方向速度の残差
+    R_nonholo = nav.sig_speed**2  # 非ホロノミック制約のノイズ共分散
+
+    # カルマンゲインと状態・共分散の更新
+    K_nonholo = nav.P @ H_nonholo.T @ inv(H_nonholo @ nav.P @ H_nonholo.T + R_nonholo)
+    nav.x = nav.x + K_nonholo @ v_nonholo
+    nav.P = (np.eye(nav.nx) - K_nonholo @ H_nonholo) @ nav.P
+
 def udbias(nav, obsb, obsr, iu, ir):
     
     trace(3, 'udbias  : tt=%.3f ns=%d\n' % (nav.tt, len(iu)))
@@ -850,11 +926,11 @@ def udbias(nav, obsb, obsr, iu, ir):
             trace(3,"     sat=%3d, F=%d: init phase=%.3f\n" % (sat[i],f+1, bias[i]))
 
 
-def udstate(nav, obsr, obsb, iu, ir, sol):
+def udstate(nav, obsr, obsb, iu, ir, sol, imu_data=None, speed_data=None):
     """ temporal update of states """
     trace(3, 'udstate : ns=%d\n' % len(iu))
     # temporal update of position/velocity/acceleration
-    udpos(nav, sol) # updates nav.x and nav.P
+    udpos(nav, sol, imu_data, speed_data) # updates nav.x and nav.P
     # temporal update of phase-bias
     udbias(nav, obsb, obsr, iu, ir) # updates outxnav.x and nav.P
 
@@ -909,15 +985,14 @@ def holdamb(nav, xa):
     # update states with constraints
     nav.x, nav.P = gn.filter(nav.x, nav.P, H[:,:nv], v[:nv], R)
         
-        
-def relpos(nav, obsr, obsb, sol):
+def relpos(nav, obsr, obsb, sol, imu_data=None, speed_data=None):
     """ relative positioning for PPK """
     
     # time diff between rover and base
     nav.dt = timediff(obsr.t, obsb.t)
-    trace(1,"\n---------------------------------------------------------\n")
+    trace(1, "\n---------------------------------------------------------\n")
     trace(1, "relpos: dt=%.3f nu=%d nr=%d\n" % (nav.dt, len(obsr.sat), len(obsb.sat)))
-    trace(1,"---------------------------------------------------------\n")
+    trace(1, "---------------------------------------------------------\n")
     if abs(nav.dt) > nav.maxage:
         trace(3, 'Age of differential too large: %.2f\n' % nav.dt)
         return
@@ -944,101 +1019,93 @@ def relpos(nav, obsr, obsb, sol):
     
     # kalman filter time propagation
     tracemat(3, 'before udstate: x=', nav.x[0:9], '.4f')
-    #tracemat(3, '  Pdiag=', np.diag(nav.P[:9,:9]), '.6f')
-    udstate(nav, obsr, obsb, iu, ir, sol)
+    udstate(nav, obsr, obsb, iu, ir, sol, imu_data, speed_data)
     tracemat(3, 'after udstate x=', nav.x[0:9], '.4f')
-    #tracemat(3, '  Pdiag=', np.diag(nav.P[:9,:9]), '.6f')
     
-    if ns <= 0:
-        trace(3, 'no common sats: %d\n' % ns)
-        return
-    
-    # save SNR values
-    for f in range(nav.nf):
-        nav.SNR_rover[obsr.sat[iu]-1,f] = obsr.S[iu,f]
-        nav.SNR_base[obsb.sat[ir]-1,f] = obsb.S[ir,f]
-
-    # undifferenced residuals for rover
-    trace(3, 'rover: dt=%.3f\n' % nav.dt)
-    yu, eu, azel = zdres(nav, obsr, rs, dts, svh, var, nav.x[0:3], 1)
-    # decode stdevs from receiver
-    rn.rcvstds(nav, obsr)
-
-    # remove non-common residuals
-    yr, er = yr[ir,:], er[ir,:]
-    yu, eu = yu[iu,:], eu[iu,:]
-    sats = obsr.sat[iu]
-    nav.azel[sats-1] = azel[iu]
-    els = azel[iu,1]
-    
-    # calculate double-differenced residuals and create state matrix from sat angles 
-    v, H, R = ddres(nav, nav.x, nav.P, yr, er, yu, eu, sats, els, nav.dt, obsr, True)
-    
-    if len(v) < 4:
-        trace(3, 'not enough double-differenced residual\n')
-        stat = gn.SOLQ_NONE
+    if ns <= 5:
+        # DRモードでの推定に切り替える
+        trace(3, 'no common sats, switching to DR mode\n')
+        nav.pmode = 'DR'
+        # DRモードでの位置更新を行う
+        udstate(nav, obsr, obsb, [], [], sol, imu_data, speed_data)
+        stat = gn.SOLQ_DGPS
     else:
-        stat = gn.SOLQ_FLOAT
-    
-    if stat != gn.SOLQ_NONE:
-        # kalman filter measurement update, updates x,y,z,sat phase biases, etc
-        tracemat(3, 'before filter x=', nav.x[0:9], '.4f')
-        #tracemat(3, '  Pdiag=', np.diag(nav.P[:9,:9]), '.6f')
-        xp, Pp = gn.filter(nav.x, nav.P, H, v, R)
-        tracemat(3, 'after filter x=', xp[0:9], '.4f')
-        #tracemat(3, '  Pdiag=', np.diag(Pp[:9,:9]), '.6f')
-        posvar = np.sum(np.diag(Pp[0:3])) / 3
-        trace(3,"posvar=%.6f \n" % posvar)
-
-        # calc zero diff residuals again after kalman filter update
-        yu, eu, _ = zdres(nav, obsr, rs, dts, svh, var, xp[0:3], 1)
-        yu, eu = yu[iu,:], eu[iu,:]
-        # calc double diff residuals again after kalman filter update for float solution 
-        v, H, R = ddres(nav, xp, Pp, yr, er, yu, eu, sats, els, nav.dt, obsr)
-        # validation of float solution, always returns 1, msg to trace file if large residual
-        valpos(nav, v, R)
-        
-        # update state and covariance matrix from kalman filter update
-        nav.x = xp.copy()
-        nav.P = Pp.copy()
-        
-        # update valid satellite status for ambiguity control
+        # SNR values を保存
         for f in range(nav.nf):
-            ix = np.where(nav.vsat[:,f] > 0)[0]
-            nav.outc[ix,f] = 0
-            if f == 0:
-                nav.ns = len(ix) # valid satellite count by L1
-        # check for too few valid phases
-        if nav.ns < 4:
-            stat = gn.SOLQ_DGPS
-            
-    # resolve integer ambiguity by LAMBDA 
-    if nav.armode > 0 and stat == gn.SOLQ_FLOAT:
-        # if valid fixed solution, process it
-        nb, xa = manage_amb_LAMBDA(nav, sats, stat, posvar)
-        if nb > 0:
-            # find zero-diff residuals for fixed solution 
-            yu, eu, azel = zdres(nav, obsr, rs, dts, svh, var, xa[0:3], 1)
-            yu, eu, el = yu[iu, :], eu[iu, :], azel[iu,1]
-            # post-fit residuals for fixed solution (xa includes fixed phase biases, rtk->xa does not) 
-            v, H, R = ddres(nav, xa, nav.P, yr, er, yu, eu, sats, el, nav.dt, obsr)
-            # validation of fixed solution, always returns valid
-            if valpos(nav, v, R):
-                nav.nfix += 1
-                if nav.armode == 3 and nav.nfix >= nav.minfix:
-                    holdamb(nav, xa)
-                stat = gn.SOLQ_FIX
+            nav.SNR_rover[obsr.sat[iu]-1,f] = obsr.S[iu,f]
+            nav.SNR_base[obsb.sat[ir]-1,f] = obsb.S[ir,f]
+
+        # undifferenced residuals for rover
+        trace(3, 'rover: dt=%.3f\n' % nav.dt)
+        yu, eu, azel = zdres(nav, obsr, rs, dts, svh, var, nav.x[0:3], 1)
+        # decode stdevs from receiver
+        rn.rcvstds(nav, obsr)
+
+        # remove non-common residuals
+        yr, er = yr[ir,:], er[ir,:]
+        yu, eu = yu[iu,:], eu[iu,:]
+        sats = obsr.sat[iu]
+        nav.azel[sats-1] = azel[iu]
+        els = azel[iu,1]
+
+        # calculate double-differenced residuals and create state matrix from sat angles 
+        v, H, R = ddres(nav, nav.x, nav.P, yr, er, yu, eu, sats, els, nav.dt, obsr, True)
+
+        if len(v) < 4:
+            trace(3, 'not enough double-differenced residual\n')
+            stat = gn.SOLQ_NONE
+        else:
+            stat = gn.SOLQ_FLOAT
         
-    # save solution status (fixed or float)
-    if stat == gn.SOLQ_FIX: 
-        sol.rr = nav.xa[0:6]
-        sol.qr = nav.Pa[0:3,0:3]
-        sol.qv = nav.Pa[3:6,3:6]
-    else: # SOLQ_FLOAT or SOLQ_DGPS
-        sol.rr = nav.x[0:6]
-        sol.qr = nav.P[0:3,0:3]
-        sol.qv = nav.P[3:6,3:6]
-        nav.nfix = 0
+        if stat != gn.SOLQ_NONE:
+            # kalman filter measurement update, updates x,y,z,sat phase biases, etc
+            tracemat(3, 'before filter x=', nav.x[0:9], '.4f')
+            xp, Pp = gn.filter(nav.x, nav.P, H, v, R)
+            tracemat(3, 'after filter x=', xp[0:9], '.4f')
+            posvar = np.sum(np.diag(Pp[0:3])) / 3
+            trace(3, "posvar=%.6f \n" % posvar)
+
+            # calc zero diff residuals again after kalman filter update
+            yu, eu, _ = zdres(nav, obsr, rs, dts, svh, var, xp[0:3], 1)
+            yu, eu = yu[iu,:], eu[iu,:]
+            # calc double diff residuals again after kalman filter update for float solution 
+            v, H, R = ddres(nav, xp, Pp, yr, er, yu, eu, sats, els, nav.dt, obsr)
+            valpos(nav, v, R)
+            
+            nav.x = xp.copy()
+            nav.P = Pp.copy()
+            
+            for f in range(nav.nf):
+                ix = np.where(nav.vsat[:,f] > 0)[0]
+                nav.outc[ix,f] = 0
+                if f == 0:
+                    nav.ns = len(ix) # valid satellite count by L1
+            if nav.ns < 4:
+                stat = gn.SOLQ_DGPS
+                
+        if nav.armode > 0 and stat == gn.SOLQ_FLOAT:
+            nb, xa = manage_amb_LAMBDA(nav, sats, stat, posvar)
+            if nb > 0:
+                yu, eu, azel = zdres(nav, obsr, rs, dts, svh, var, xa[0:3], 1)
+                yu, eu, el = yu[iu, :], eu[iu, :], azel[iu,1]
+                v, H, R = ddres(nav, xa, nav.P, yr, er, yu, eu, sats, el, nav.dt, obsr)
+                if valpos(nav, v, R):
+                    nav.nfix += 1
+                    if nav.armode == 3 and nav.nfix >= nav.minfix:
+                        holdamb(nav, xa)
+                    stat = gn.SOLQ_FIX
+            
+        if stat == gn.SOLQ_FIX: 
+            sol.rr = nav.xa[0:6]
+            sol.qr = nav.Pa[0:3,0:3]
+            sol.qv = nav.Pa[3:6,3:6]
+        else: 
+            sol.rr = nav.x[0:6]
+            sol.qr = nav.P[0:3,0:3]
+            sol.qv = nav.P[3:6,3:6]
+            nav.nfix = 0
+
+    # Update solution status
     sol.stat = stat
     sol.ratio = nav.ratio
     sol.age = nav.dt
@@ -1046,7 +1113,6 @@ def relpos(nav, obsr, obsb, sol):
     nav.rr = sol.rr[0:3]
     tracemat(3, 'sol_rr= ', sol.rr, '15.3f')
                 
-    # save phases and times for cycle slip detection
     for i, sat in enumerate(sats):
         for f in range(nav.nf):
             if obsb.L[ir[i],f] != 0:
@@ -1055,7 +1121,6 @@ def relpos(nav, obsr, obsb, sol):
             if obsr.L[iu[i],f] != 0:
                 nav.pt[1,sat-1,f] = obsr.t
                 nav.ph[1,sat-1,f] = obsr.L[iu[i],f]
-    # save current LLI and fix status
     nav.slip[:,:] = 0
     for f in range(nav.nf):
         ix0 = np.where((obsb.L[:,f] != 0) | (obsb.lli[:,f] != 0))[0]
@@ -1064,20 +1129,27 @@ def relpos(nav, obsr, obsb, sol):
         nav.prev_lli[obsr.sat[ix1]-1,f,1] = obsr.lli[ix1,f]
     if nav.armode > 0:
         nav.prev_fix = copy(nav.fix)
-        # update lock counts for sats used in fix and disabled sats (lock < 0)
         for f in range(nav.nf):
             ix = np.where(((nav.nb_ar > 0) & (nav.fix[:,f] >= 2)) | (nav.lock[:,f] < 0))[0]
             nav.lock[ix,f] += 1
-
             
 def rtkpos(nav, rov, base, fp_stat, dir):
     """ relative positioning for PPK """
     trace(3, 'rtkpos: start solution, dir=%d\n' % dir)
     n = 0
     sol = gn.Sol()
+    
+    # Load speed and IMU data
+    imu_data = rov.imu_data  # IMU data loaded from CSV
+    speed_data = rov.speed_data  # Speed data loaded from CSV
+    
+    # Initialize speed and IMU indices
+    imu_index = 0
+    speed_index = 0
+
     # loop through all epochs
     while True:
-        if n== 0:
+        if n == 0:
             # first epoch
             obsr, obsb = rn.first_obs(nav, rov, base, dir)
             t = 0
@@ -1090,12 +1162,27 @@ def rtkpos(nav, rov, base, fp_stat, dir):
                     nav.x[0:6] = cfg.rr_b
             nav.x[6:9] = 1E-6  # match RTKLIB
         else:
-            # get next rover obs and next base obs if required
             if len(nav.sol) > 0:
-                t = nav.sol[-1].t # previous epoch
+                t = nav.sol[-1].t  # previous epoch
             obsr, obsb = rn.next_obs(nav, rov, base, dir)
         if obsr == []:
             break
+        
+        # Find corresponding IMU and speed data for current epoch
+        imu_data_current = None
+        speed_data_current = None
+        week, tow = gn.time2gpst(obsr.t) 
+
+        if imu_index < len(imu_data['time']) and (tow - imu_data['time'][imu_index]) < DTTOL:
+            imu_data_current = {
+                'angular_rate': imu_data['angular_rate'][imu_index]
+            }
+            imu_index += 1
+            
+        if speed_index < len(speed_data['time']) and (tow - speed_data['time'][speed_index]) < DTTOL:
+            speed_data_current = speed_data['speed'][speed_index]
+            speed_index += 1
+
         # single precision solution, used to update solution time
         if nav.use_sing_pos or sol.stat == gn.SOLQ_NONE or sol.rr[0] == 0.0:
             sol = pntpos(obsr, nav)
@@ -1104,9 +1191,10 @@ def rtkpos(nav, rov, base, fp_stat, dir):
         if sol.t.time == 0:
             sol.t = obsr.t
         if t != 0:
-            nav.tt = timediff(sol.t, t) # timediff from previous epoch
+            nav.tt = timediff(sol.t, t)  # timediff from previous epoch
+
         # relative solution
-        relpos(nav, obsr, obsb, sol)
+        relpos(nav, obsr, obsb, sol, imu_data_current, speed_data_current)
         outsolstat(nav, sol, fp_stat)
         ep = gn.time2epoch(sol.t)
         stdout.write('\r   %2d/%2d/%4d %02d:%02d:%05.2f: %d' % (ep[1], ep[2], ep[0],
@@ -1115,6 +1203,5 @@ def rtkpos(nav, rov, base, fp_stat, dir):
         if nav.maxepoch != None and n > nav.maxepoch:
             break
     trace(3, 'rtkpos: end solution\n')
-                
 
 

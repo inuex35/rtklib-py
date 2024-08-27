@@ -4,7 +4,7 @@ from rtkcmn import uGNSS, rSIG
 
 # ----------- PPK options -------------------------------
 nf = 2                   # num frequencies ( 1 or 2)
-pmode = 'kinematic'      # static, kinematic
+pmode = 'DR'      # static, kinematic
 filtertype = 'forward'   # forward, backward, combined, combined_noreset
 use_sing_pos = False     # run initial single precision sol each epoch, not
                          # necessary unless receiever clock errors are large
@@ -22,15 +22,18 @@ interp_base = False      # interpolate base observations
 
 # ------------  Kalman Filter Statistics ------------------------
 eratio = [300, 300]      # ratio between psuedorange noise and carrier phase noise for L1, L2
-efact = {uGNSS.GPS: 1.0, uGNSS.GLO: 1.5, uGNSS.GAL: 1.0, uGNSS.BDS: 1.0} # relative weighting of each constellation
+efact = {uGNSS.GPS: 1.0, uGNSS.GLO: 1.5, uGNSS.GAL: 1.0, uGNSS.BDS: 1.0, uGNSS.QZS: 1.0} # relative weighting of each constellation
 err = [0, 0.003, 0.003, 0.0, 0, 0, 5e-12]  # error sigmas [-, base, el, bl, snr, rcvstd, satclk]
 snrmax = 52              # max signal strength for variance calc (dB-Hz)
 accelh = 3               # horiz accel noise sigma (m/sec2)
 accelv = 1               # vert accel noise sigma (m/sec2)
+accelw = 1
 prnbias = 1e-4           # Carrier phase bias sigma ( cycles)
 sig_p0 = 30.0            # initial pos sigma (m)
 sig_v0 = 10.0            # initial vel/acc sigma (m/sec)
 sig_n0 = 30.0            # inital bias sigma (m)
+sig_a0 = 10.0
+sig_w0 = 10.0
 
 #  -------------Ambiguity resolution options ----------------
 armode = 3               # 0:off, 1:continuos,3:fix-and-hold
@@ -49,7 +52,8 @@ mindropsats = 10         # min sat pairs to drop sats from AR
 sing_p0 = 100            # initial pos sigma
 sing_v0 = 10             # initial vel/acc sigma
 sing_elmin = 10          # minimum elevation (degrees)
-
+sig_angrate = 0.01
+sig_speed = 0.001
 # -------------Base and Rover positions ------------------
 # base position, set to zeros to use rinex header pos
 rb = [0, 0, 0]
@@ -65,7 +69,7 @@ rr_b  = [0, 0, 0, 0, 0, 0]
 
 
 # ----------- Configure observation signals ----------------
-gnss_t = [uGNSS.GPS, uGNSS.GAL, uGNSS.GLO]
+gnss_t = [uGNSS.GPS, uGNSS.GAL, uGNSS.GLO, uGNSS.BDS]
 
 # Valid signals
 sig_tbl = {'1C': rSIG.L1C, '1X': rSIG.L1X, '1W': rSIG.L1W,

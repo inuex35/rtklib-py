@@ -6,6 +6,7 @@ Copyright (c) 2022 Tim Everett
 """
 
 import numpy as np
+import pandas as pd
 from copy import deepcopy
 from rtkcmn import uGNSS, rSIG, Eph, Geph, prn2sat, gpst2time, time2gpst, Obs, \
                     epoch2time, timediff, timeadd, utc2gpst, bdt2gpst
@@ -19,7 +20,6 @@ class rnx_decode:
     def __init__(self, cfg):
         self.ver = -1.0
         self.fobs = None
-        #self.gnss_tbl = {'G': uGNSS.GPS, 'E': uGNSS.GAL, 'R': uGNSS.GLO, 'C': uGNSS.BDS, 'J': uGNSS.QZS}
         self.gnss_tbl = {'G': uGNSS.GPS, 'E': uGNSS.GAL, 'R': uGNSS.GLO, 'C': uGNSS.BDS, 'J': uGNSS.QZS}
         self.sig_tbl = cfg.sig_tbl
         self.skip_sig_tbl = cfg.skip_sig_tbl
@@ -29,6 +29,8 @@ class rnx_decode:
         self.nsig = np.zeros((uGNSS.GNSSMAX), dtype=int)
         self.nband = np.zeros((uGNSS.GNSSMAX), dtype=int)
         self.pos = np.array([0, 0, 0])
+        self.speed_data = None
+        self.imu_data = None
 
     def flt(self, u, c=-1):
         if c >= 0:
@@ -335,6 +337,19 @@ class rnx_decode:
     def decode_obsfile(self, nav, obsfile, maxepoch):
         self.decode_obsh(obsfile)
         self.decode_obs(nav, maxepoch)
+
+    def load_speed_imu(self, file_path):
+        """Load speed and IMU data from CSV file."""
+        data = pd.read_csv(file_path)
+        self.imu_data = {
+            'time': data['TIME'].to_numpy(),
+            'angular_rate': data[['ROLL_VELOCITY', 'PITCH_VELOCITY', 'HEADING_VELOCITY']].to_numpy()
+        }
+        self.speed_data = {
+            'time': data['TIME'].to_numpy(),
+            'speed': data['SPEED'].to_numpy()
+        }
+        print(f"Speed and IMU data loaded from {file_path}.")
 
 def first_obs(nav, rov, base, dir):
     if dir == 1: # forward solution

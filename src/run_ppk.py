@@ -21,10 +21,10 @@ basepos = []  # default to not specified here
 # cfgfile = 'config_phone.py' # must be in src folder or absolute path
 
 # u-blox example
-datadir = '../data/u-blox'
-navfile = 'rover.nav'
-rovfile = 'rover.obs'
-basefile = 'tmg23590.obs'
+datadir = '../data/challenge'
+navfile = 'back_f9p.nav'
+rovfile = 'back_f9p.obs'
+basefile = 'base_f9p_am.obs'
 cfgfile = 'config_f9p.py'  # must be in src folder or absolute path
 
 ###################################################################
@@ -76,6 +76,8 @@ elif nav.rb[0] == 0:
 # load nav data from rover obs
 print('Reading nav data...')
 rov.decode_nav(navfile, nav)
+
+rov.load_speed_imu("processed_data.csv")
 
 # calculate solution
 print('Calculating solution ...\n')
