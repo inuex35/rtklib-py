@@ -6,7 +6,7 @@ Maintains RTKLib structure but uses ISAM2 for filtering
 import sys, os, shutil
 
 # Set run parameters
-maxepoch = 100  # Process 100 epochs
+maxepoch = 10000  # Process 1000 epochs (about 3.3 minutes at 5Hz)
 trace_level = 3  # Debug trace level
 basepos = []     # Default to not specified here
 
@@ -118,6 +118,27 @@ try:
         print(f"  Float solutions: {float_count} ({100*float_count/len(sol):.1f}%)")
         print(f"  Single solutions: {single_count} ({100*single_count/len(sol):.1f}%)")
         
+    # Generate plots automatically
+    print("\nGenerating trajectory plots...")
+    
+    # Return to original directory before running plot scripts
+    os.chdir(original_dir)
+    
+    # Run trajectory analysis plot
+    os.system(f"uv run python plot_trajectory_analysis.py {solfile} {solfile[:-4]}")
+    
+    # Run trajectory map plot
+    map_file = os.path.join(os.path.dirname(solfile), 'trajectory_map.html')
+    os.system(f"uv run python plot_trajectory_map.py {solfile}")
+    if os.path.exists(map_file):
+        # Move map to same directory as solution
+        os.system(f"mv trajectory_map.html {map_file}")
+    
+    print(f"\nPlots generated:")
+    print(f"  Analysis plot: {solfile[:-4]}_analysis.png")
+    print(f"  Interactive map: {map_file}")
+    
 finally:
     # Return to original directory
-    os.chdir(original_dir)
+    if 'original_dir' in locals():
+        os.chdir(original_dir)

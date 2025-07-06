@@ -73,9 +73,14 @@ class ImuLoader:
         unix_ms = glp.tow_to_unix_millis(gps_weeks, gps_tows)
         self.timestamps = unix_ms / 1000.0
         
-        # Extract IMU measurements
+        # Extract IMU measurements and apply axis inversion (Y and Z axes)
         self.accelerations = df[['ax', 'ay', 'az']].values
+        self.accelerations[:, 1] = -self.accelerations[:, 1]  # Invert Y axis
+        self.accelerations[:, 2] = -self.accelerations[:, 2]  # Invert Z axis
+        
         self.angular_velocities = df[['wx', 'wy', 'wz']].values
+        self.angular_velocities[:, 1] = -self.angular_velocities[:, 1]  # Invert Y axis
+        self.angular_velocities[:, 2] = -self.angular_velocities[:, 2]  # Invert Z axis
         
         # Store full dataframe for additional info
         self.imu_data = df
@@ -87,10 +92,15 @@ class ImuLoader:
         """
         df = pd.read_csv(imu_file)
         
-        # Extract data
+        # Extract data and apply axis inversion (Y and Z axes)
         self.timestamps = df['timestamp'].values
         self.accelerations = df[['acc_x', 'acc_y', 'acc_z']].values
+        self.accelerations[:, 1] = -self.accelerations[:, 1]  # Invert Y axis
+        self.accelerations[:, 2] = -self.accelerations[:, 2]  # Invert Z axis
+        
         self.angular_velocities = df[['gyro_x', 'gyro_y', 'gyro_z']].values
+        self.angular_velocities[:, 1] = -self.angular_velocities[:, 1]  # Invert Y axis
+        self.angular_velocities[:, 2] = -self.angular_velocities[:, 2]  # Invert Z axis
         
         self.imu_data = df
         
