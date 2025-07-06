@@ -784,15 +784,21 @@ def tracemat(level, msg, mat, fmt='.6f'):
     if level > trace_level:
         return
     fmt = '{:' + fmt + '}'
-    if len(mat.shape) == 1 or mat.shape[1] == 1:
+    
+    # Ensure mat is a numpy array
+    mat = np.asarray(mat)
+    
+    if len(mat.shape) == 1:
         trace(level, msg)
-        sys.stderr.write(' '.join(map(fmt.format, mat)))
+        sys.stderr.write(' '.join([fmt.format(float(x)) for x in mat]))
         sys.stderr.write('\n')
-    else:
+    elif len(mat.shape) == 2:
         trace(level, msg + '\n')
         for row in mat:
-            sys.stderr.write(' '.join(map(fmt.format, row)))
+            sys.stderr.write(' '.join([fmt.format(float(x)) for x in row]))
             sys.stderr.write('\n')
+    else:
+        trace(level, msg + ' (shape=' + str(mat.shape) + ')\n')
     
 def tracelevel(level):
     global trace_level

@@ -6,7 +6,7 @@ Maintains RTKLib structure but uses ISAM2 for filtering
 import sys, os, shutil
 
 # Set run parameters
-maxepoch = 10000  # Process 1000 epochs (about 3.3 minutes at 5Hz)
+maxepoch = 100  # Process 100 epochs for testing
 trace_level = 3  # Debug trace level
 basepos = []     # Default to not specified here
 
@@ -99,7 +99,11 @@ try:
     sol = procpos(nav, rov, base, fp_stat)
     
     # Save solution to file (we're in the data directory now)
-    savesol(sol, rovfile[:-4] + '_isam.pos')
+    print(f"\nSolution contains {len(sol) if sol else 0} epochs")
+    if sol and len(sol) > 0:
+        savesol(sol, rovfile[:-4] + '_isam.pos')
+    else:
+        print("WARNING: No solution data to save!")
     fp_stat.close()
     
     print(f"\nProcessing complete!")

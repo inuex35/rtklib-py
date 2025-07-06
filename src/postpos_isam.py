@@ -35,8 +35,10 @@ def procpos_isam(nav, rov, base, fp_stat):
             # Run forward solution with ISAM2
             firstpos(nav, rov, base, dir=1)
             rtkpos_isam(nav, rov, base, fp_stat, dir=1) 
-            sol0 = deepcopy(nav.sol)
-            savesol(sol0,'forward_isam.pos')
+            sol0 = deepcopy(nav.sol) if hasattr(nav, 'sol') and nav.sol else []
+            gn.trace(1, f"Forward solution contains {len(sol0)} epochs\n")
+            if sol0:
+                savesol(sol0,'forward_isam.pos')
             
         if nav.filtertype != 'forward':
             # Run backward solution with ISAM2
@@ -69,7 +71,8 @@ def procpos_isam(nav, rov, base, fp_stat):
         elif nav.filtertype == 'backward':
             sol = sol1
         else:
-            sol = sol0
+            # For forward-only, return the solution from nav.sol
+            sol = nav.sol if hasattr(nav, 'sol') else sol0
             
     except Exception as e:
         gn.trace(1, f'procpos_isam error: {e}\n')
