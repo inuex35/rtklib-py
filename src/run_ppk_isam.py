@@ -7,7 +7,7 @@ import sys, os, shutil
 
 # Set run parameters
 maxepoch = 1000  # Process 100 epochs
-trace_level = 3  # Debug trace level
+trace_level = 4  # Debug trace level (increased to see time sync)
 basepos = []     # Default to not specified here
 
 # Specify input files for PPC-Dataset

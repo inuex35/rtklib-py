@@ -23,6 +23,7 @@ import __ppk_config as cfg
 import gtsam
 from gtsam import symbol_shorthand as S
 import pandas as pd
+import gnss_lib_py as glp
 
 # Import existing RTKLib functions
 from rtkpos import (
@@ -196,7 +197,9 @@ class RTKLibISAM2:
             self.imu_preintegrated.integrateMeasurement(
                 self.imu_accels[i], self.imu_gyros[i], dt)
                 
-        trace(3, f'Added {len(imu_idx)} IMU measurements between epochs\n')
+        trace(3, f'Added {len(imu_idx)} IMU measurements between epochs (t_prev={t_prev:.3f}, t_curr={t_curr:.3f})\n')
+        if len(imu_idx) > 0:
+            trace(4, f'IMU time range: {self.imu_timestamps[imu_idx[0]]:.3f} to {self.imu_timestamps[imu_idx[-1]]:.3f}\n')
         
         # Add IMU factor
         x_prev = self._symbol('X', self.idx - 1)
@@ -268,6 +271,10 @@ class RTKLibISAM2:
         # Initialize covariance if needed
         if not hasattr(self.nav, 'P') or self.nav.P.shape[0] == 0:
             self.nav.P = np.eye(self.nav.nx) * 1e4  # Large initial uncertainty
+            
+        # Set initial IMU time in GPS TOW
+        unix_ms = (obsr.t.time + obsr.t.sec) * 1000.0
+        _, self.last_imu_time = glp.unix_millis_to_tow(unix_ms)
         
     def relpos(self, nav, obsr, obsb, sol):
         """Relative positioning with ISAM2 (replaces RTKLib's relpos)"""
@@ -297,7 +304,10 @@ class RTKLibISAM2:
         # Add IMU factors if available
         if self.idx > 0 and self.last_imu_time is not None:
             # Convert observation time to GPS TOW for comparison with IMU timestamps
-            current_gps_tow = obsr.t.time + obsr.t.sec
+            # obsr.t.time is Unix timestamp in seconds, convert to milliseconds then to GPS TOW
+            unix_ms = (obsr.t.time + obsr.t.sec) * 1000.0
+            gps_week, current_gps_tow = glp.unix_millis_to_tow(unix_ms)
+            trace(4, f'GNSS epoch time: Unix={obsr.t.time + obsr.t.sec:.3f}, GPS Week={gps_week}, GPS TOW={current_gps_tow:.3f}\n')
             self._add_imu_factors(self.last_imu_time, current_gps_tow)
             
         # Add GNSS factors
@@ -353,7 +363,9 @@ class RTKLibISAM2:
             self.values.insert(b_key, gtsam.imuBias.ConstantBias())
             self.values.insert(c_key, np.array([nav.x[6] * rCST.CLIGHT]))
             
-        self.last_imu_time = obsr.t.time + obsr.t.sec
+        # Store last IMU time in GPS TOW
+        unix_ms = (obsr.t.time + obsr.t.sec) * 1000.0
+        _, self.last_imu_time = glp.unix_millis_to_tow(unix_ms)
         
         # Update nav solution list
         nav.sol.append(deepcopy(sol))

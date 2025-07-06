@@ -86,8 +86,10 @@ class ImuLoader:
         gyro_z_col = [c for c in col_names if 'Ang Rate Z' in c][0]
         
         # Convert GPS time to timestamps
-        # GPS TOW is already in seconds, just store it directly
-        self.timestamps = df[gps_tow_col].values
+        # GPS TOW is already in seconds, but need to add GPS leap seconds (18s as of 2024)
+        # to match the GNSS time conversion
+        gps_leap_seconds = 18.0
+        self.timestamps = df[gps_tow_col].values + gps_leap_seconds
         
         # Extract IMU measurements
         self.accelerations = df[[acc_x_col, acc_y_col, acc_z_col]].values
