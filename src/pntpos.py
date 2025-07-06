@@ -167,6 +167,9 @@ def estpos(obs, nav, rs, dts, svh):
     """ estimate position and clock errors with standard precision """
     x = np.zeros(NX)
     x[0:3] = nav.x[0:3]
+    # Use previous clock bias as initial value if available
+    if len(nav.x) >= 4:
+        x[3] = nav.x[3]
     sol = Sol()
     trace(3, 'estpos  : n=%d\n' % len(rs))
     for iter in range(MAXITR):
@@ -195,6 +198,8 @@ def estpos(obs, nav, rs, dts, svh):
     sol.dtr = x[3:5] / rCST.CLIGHT
     sol.rr[0:3] = x[0:3]
     sol.rr[3:6] = 0
+    # Save estimated states for next epoch
+    nav.x[0:6] = x[0:6]
     return sol
 
 def pntpos(obs, nav):
