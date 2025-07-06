@@ -120,6 +120,7 @@ class RTKLibISAM2:
         
         # Process double-differenced measurements (same as RTKLib)
         # Get base station residuals
+        trace(3, f'Base position: {self.nav.rb}\n')
         yr, er, azelr = zdres(self.nav, obsb, rsb, dtsb, svhb, varb, self.nav.rb, 0)
         
         # Get rover residuals  
@@ -143,11 +144,19 @@ class RTKLibISAM2:
                        self.nav.dt, obsr, True)
         
         trace(3, f'ddres returned {len(v)} measurements, needed at least 4\n')
+        if len(v) > 0:
+            trace(3, f'DD residuals: min={np.min(v):.3f}, max={np.max(v):.3f}, mean={np.mean(v):.3f}\n')
         
         if len(v) < 4:
             trace(3, 'not enough double-differenced residuals for GNSS factors\n')
-            # For now, add simple pseudorange factors instead
-            self._add_simple_pseudorange_factors(obsr, rs, dts, svh, var)
+            # Add simple position constraint based on single point positioning
+            if hasattr(self, 'nav') and self.nav.x[0] != 0:
+                x_key = self._symbol('X', self.idx)
+                # Use current position with larger uncertainty
+                pos_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([10.0, 10.0, 10.0, 0.1, 0.1, 0.1]))
+                current_pose = gtsam.Pose3(gtsam.Rot3(), gtsam.Point3(self.nav.x[0:3]))
+                self.graph.add(gtsam.PriorFactorPose3(x_key, current_pose, pos_noise))
+                trace(3, 'Added position constraint from single point positioning\n')
             return
             
         # Add GNSS factors for each measurement
@@ -212,7 +221,7 @@ class RTKLibISAM2:
         imu_factor = gtsam.ImuFactor(
             x_prev, v_prev, x_curr, v_curr, b_prev,
             self.imu_preintegrated)
-        self.graph.add(imu_factor)
+        #self.graph.add(imu_factor)
         
         # Add bias random walk
         bias_noise = gtsam.noiseModel.Diagonal.Sigmas(
@@ -300,6 +309,12 @@ class RTKLibISAM2:
         # Initialize on first epoch
         if self.idx == 0:
             self._initialize_state(obsr)
+            # Also update the solution structure for the first epoch
+            sol.t = obsr.t
+            sol.rr[0:6] = self.nav.x[0:6].copy()
+            sol.stat = gn.SOLQ_SINGLE  # Single point solution for first epoch
+            sol.qr = np.eye(3) * 10.0
+            sol.dtr = np.array([self.nav.x[6], 0])  # Clock bias
             
         # Add IMU factors if available
         if self.idx > 0 and self.last_imu_time is not None:
@@ -315,9 +330,17 @@ class RTKLibISAM2:
         
         # Update ISAM2
         if self.graph.size() > 0:
-            result = self.isam.update(self.graph, self.values)
-            self.graph = gtsam.NonlinearFactorGraph()
-            self.values = gtsam.Values()
+            try:
+                result = self.isam.update(self.graph, self.values)
+                self.graph = gtsam.NonlinearFactorGraph()
+                self.values = gtsam.Values()
+            except Exception as e:
+                trace(2, f"ISAM2 update failed at idx {self.idx}: {e}\n")
+                # Clear the graph and values to avoid accumulating bad factors
+                self.graph = gtsam.NonlinearFactorGraph()
+                self.values = gtsam.Values()
+                # Keep the solution from single point positioning
+                return
             
             # Extract current estimate
             current_estimate = self.isam.calculateEstimate()
@@ -336,14 +359,16 @@ class RTKLibISAM2:
                 sol.t = obsr.t
                 sol.rr[0:6] = nav.x[0:6].copy()
                 sol.stat = gn.SOLQ_FLOAT
+                sol.dtr = np.array([nav.x[6], 0])  # Clock bias
                 
                 # Get covariance (simplified)
                 try:
                     marginals = gtsam.Marginals(self.isam.getFactorsUnsafe(), current_estimate)
                     cov = marginals.marginalCovariance(x_key)
-                    sol.qr[0:3,0:3] = cov[3:6, 3:6]  # Position covariance
+                    # Extract 3x3 position covariance matrix
+                    sol.qr = cov[3:6, 3:6]  # Position covariance (translation part)
                 except:
-                    sol.qr = np.eye(6) * 10.0
+                    sol.qr = np.eye(3) * 10.0
             except Exception as e:
                 trace(2, f"Failed to extract estimate at idx {self.idx}: {e}\n")
                 
@@ -362,6 +387,18 @@ class RTKLibISAM2:
             self.values.insert(v_key, nav.x[3:6])
             self.values.insert(b_key, gtsam.imuBias.ConstantBias())
             self.values.insert(c_key, np.array([nav.x[6] * rCST.CLIGHT]))
+            
+            # Add velocity constraint if no IMU
+            if not hasattr(self.nav, 'imu_loader') or self.nav.imu_loader.timestamps is None:
+                # Add constant velocity factor
+                x_prev = self._symbol('X', self.idx - 1)
+                v_prev = self._symbol('V', self.idx - 1)
+                dt = 0.2  # 5Hz GNSS rate
+                # Position should follow velocity model
+                pos_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([1.0, 1.0, 1.0, 0.1, 0.1, 0.1]))
+                vel_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([0.1, 0.1, 0.1]))
+                # Between factor for velocity (constant velocity model)
+                self.graph.add(gtsam.BetweenFactorVector(v_prev, v_key, np.zeros(3), vel_noise))
             
         # Store last IMU time in GPS TOW
         unix_ms = (obsr.t.time + obsr.t.sec) * 1000.0

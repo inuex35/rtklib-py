@@ -6,8 +6,8 @@ Maintains RTKLib structure but uses ISAM2 for filtering
 import sys, os, shutil
 
 # Set run parameters
-maxepoch = 1000  # Process 100 epochs
-trace_level = 4  # Debug trace level (increased to see time sync)
+maxepoch = 1000  # Process 10 epochs for debugging
+trace_level = 3  # Debug trace level
 basepos = []     # Default to not specified here
 
 # Specify input files for PPC-Dataset
