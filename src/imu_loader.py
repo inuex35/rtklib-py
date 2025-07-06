@@ -75,7 +75,7 @@ class ImuLoader:
         
         # Extract IMU measurements and apply axis inversion (Y and Z axes)
         self.accelerations = df[['ax', 'ay', 'az']].values
-        self.accelerations[:, 1] = -self.accelerations[:, 1]  # Invert Y axis
+        self.accelerations[:, 1] = self.accelerations[:, 1]  # Invert Y axis
         self.accelerations[:, 2] = -self.accelerations[:, 2]  # Invert Z axis
         
         self.angular_velocities = df[['wx', 'wy', 'wz']].values

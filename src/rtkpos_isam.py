@@ -64,6 +64,10 @@ class RTKLibISAM2:
         self.imu_preintegrated = None
         self.last_imu_time = None
         
+        # Ambiguity states for carrier phase
+        self.ambiguities = {}  # {(sat, freq): symbol_index}
+        self.amb_idx = 0  # Counter for ambiguity states
+        
         # Initialize IMU if available
         self._init_imu()
         
@@ -130,6 +134,30 @@ class RTKLibISAM2:
         """Create GTSAM symbol"""
         return getattr(S, key_char)(idx)
         
+    def _get_ambiguity_key(self, sat, freq):
+        """Get or create ambiguity key for satellite and frequency"""
+        key = (sat, freq)
+        
+        if key not in self.ambiguities:
+            # Create new ambiguity state
+            a_key = self._symbol('A', self.amb_idx)
+            self.ambiguities[key] = a_key
+            self.amb_idx += 1
+            
+            # Initialize ambiguity value if not exists
+            if not self.values.exists(a_key):
+                # Initial ambiguity value (float)
+                initial_amb = 0.0
+                self.values.insert(a_key, np.array([initial_amb]))
+                
+                # Add prior with large uncertainty
+                amb_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([100.0]))
+                self.graph.add(gtsam.PriorFactorVector(a_key, np.array([initial_amb]), amb_noise))
+                
+                trace(3, f"Created ambiguity state A{self.amb_idx-1} for sat {sat} freq {freq}\n")
+        
+        return self.ambiguities[key]
+        
     def _add_gnss_factors(self, obsr, obsb, rs, rsb, dts, dtsb, svh, svhb, var, varb):
         """Add GNSS factors to the graph
         
@@ -172,18 +200,50 @@ class RTKLibISAM2:
             return
             
         # Add GNSS factors for each measurement
-        for i in range(len(v)):
-            if abs(v[i]) > 0 and R[i,i] > 0:
-                # Create custom GNSS factor
-                noise = gtsam.noiseModel.Gaussian.Covariance(np.array([[R[i,i]]]))
+        nf = len(v) // self.nav.nf  # Number of satellite pairs
+        
+        for f in range(self.nav.nf):  # For each frequency
+            for i in range(nf):
+                idx = f * nf + i
+                if idx >= len(v) or abs(v[idx]) == 0 or R[idx,idx] <= 0:
+                    continue
+                    
+                # Create noise model
+                noise = gtsam.noiseModel.Gaussian.Covariance(np.array([[R[idx,idx]]]))
                 
                 # Extract position part of H matrix
-                h_pos = H[i, 0:3]
-                h_clk = H[i, 3] if H.shape[1] > 3 else 0
+                h_pos = H[idx, 0:3]
+                h_clk = H[idx, 3] if H.shape[1] > 3 else 0
                 
-                # Create factor (simplified - in practice would use custom factor)
-                factor = GNSSPseudorangeFactor(x_key, c_key, v[i], h_pos, h_clk, noise)
-                self.graph.add(factor)
+                # Check measurement type based on index
+                # In RTKLib, measurements are ordered: L1, L2, P1, P2 for each satellite
+                # For double-differenced, we get all satellites for each measurement type
+                
+                # Determine if this is carrier phase or pseudorange
+                # First half of measurements are carrier phase, second half are pseudorange
+                total_meas = len(v) 
+                is_carrier = idx < total_meas // 2
+                
+                if not is_carrier:  # Pseudorange
+                    factor = GNSSPseudorangeFactor(x_key, c_key, v[idx], h_pos, h_clk, noise)
+                    self.graph.add(factor)
+                    trace(3, f"Added pseudorange factor for sat {sats[i]} with residual {v[idx]:.3f}\n")
+                else:  # Carrier phase
+                    # Get satellite and create/retrieve ambiguity key
+                    sat = sats[i]
+                    # Frequency is based on which half of carrier measurements
+                    freq_idx = 0 if idx < nf else 1
+                    amb_key = self._get_ambiguity_key(sat, freq_idx)
+                    
+                    # Get wavelength
+                    freq = sat2freq(sat, freq_idx, self.nav)
+                    if freq > 0:
+                        wavelength = rCST.CLIGHT / freq
+                        factor = GNSSCarrierPhaseFactor(x_key, c_key, amb_key, 
+                                                      v[idx], h_pos, h_clk, 
+                                                      wavelength, noise)
+                        self.graph.add(factor)
+                        trace(3, f"Added carrier phase factor for sat {sats[i]} freq {freq_idx} with residual {v[idx]:.3f}, wavelength {wavelength:.3f}\n")
                 
     def _add_imu_factors(self, t_prev, t_curr):
         """Add IMU preintegrated factors between epochs"""
@@ -478,6 +538,51 @@ class RTKLibISAM2:
         # Update nav solution list
         nav.sol.append(deepcopy(sol))
         
+        # Try ambiguity resolution if enough epochs
+        if self.idx > 20 and nav.armode > 0 and sol.stat == gn.SOLQ_FLOAT:
+            self._resolve_ambiguities(nav, sol)
+    
+    def _resolve_ambiguities(self, nav, sol):
+        """Try to resolve integer ambiguities using LAMBDA method"""
+        try:
+            # Get current estimate
+            current_estimate = self.isam.calculateEstimate()
+            
+            # Collect float ambiguities
+            amb_float = []
+            amb_keys = []
+            
+            for (sat, freq), a_key in self.ambiguities.items():
+                if current_estimate.exists(a_key):
+                    amb_value = current_estimate.atVector(a_key)[0]
+                    amb_float.append(amb_value)
+                    amb_keys.append(a_key)
+                    
+            if len(amb_float) < 4:
+                return  # Not enough ambiguities
+                
+            # Get covariance matrix for ambiguities
+            n = len(amb_float)
+            Q = np.eye(n) * 0.01  # Simplified - should extract from marginals
+            
+            # Apply LAMBDA
+            amb_fixed, s = mlambda(np.array(amb_float), Q, 2)
+            
+            # Check ratio test
+            if s[0] > 0 and s[1] / s[0] > nav.thresar:
+                trace(2, f"Ambiguity fixed! Ratio: {s[1]/s[0]:.1f}\n")
+                sol.stat = gn.SOLQ_FIX
+                
+                # Update ambiguities with fixed values
+                for i, a_key in enumerate(amb_keys):
+                    fixed_value = amb_fixed[i, 0]
+                    # Add tight constraint on ambiguity
+                    noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([0.01]))
+                    self.graph.add(gtsam.PriorFactorVector(a_key, np.array([fixed_value]), noise))
+                    
+        except Exception as e:
+            trace(3, f"Ambiguity resolution failed: {e}\n")
+        
     def _add_simple_pseudorange_factors(self, obs, rs, dts, svh, var):
         """Add simple pseudorange factors when double-differencing fails"""
         x_key = self._symbol('X', self.idx)
@@ -637,6 +742,63 @@ class GNSSPseudorangeFactor(gtsam.CustomFactor):
         self.residual = residual
         self.h_pos = h_pos
         self.h_clk = h_clk
+
+
+def gnss_carrier_phase_error(residual, h_pos, h_clk, wavelength, this, values, jacobians):
+    """Error function for GNSS carrier phase factor"""
+    pose_key = this.keys()[0]
+    clock_key = this.keys()[1]
+    amb_key = this.keys()[2]
+    
+    pose = values.atPose3(pose_key)
+    clock = values.atVector(clock_key)[0]
+    ambiguity = values.atVector(amb_key)[0]
+    
+    # Error includes ambiguity term
+    # residual = measured - (predicted + wavelength * ambiguity)
+    # so error = -residual + wavelength * ambiguity
+    error = np.array([-residual + wavelength * ambiguity])
+    
+    if jacobians is not None:
+        # Jacobian w.r.t pose (only position part)
+        J_pose = np.zeros((1, 6))
+        J_pose[0, 0:3] = -h_pos
+        jacobians[0] = J_pose
+        
+        # Jacobian w.r.t clock
+        jacobians[1] = np.array([[-h_clk]])
+        
+        # Jacobian w.r.t ambiguity
+        jacobians[2] = np.array([[wavelength]])
+        
+    return error
+
+
+class GNSSCarrierPhaseFactor(gtsam.CustomFactor):
+    """Custom GNSS carrier phase factor"""
+    
+    def __init__(self, pose_key, clock_key, amb_key, residual, h_pos, h_clk, wavelength, noise_model):
+        """Initialize carrier phase factor
+        
+        Args:
+            pose_key: Key for pose variable
+            clock_key: Key for clock bias variable  
+            amb_key: Key for ambiguity variable
+            residual: Measurement residual
+            h_pos: Jacobian w.r.t position (3x1)
+            h_clk: Jacobian w.r.t clock
+            wavelength: Carrier wavelength
+            noise_model: Measurement noise model
+        """
+        # Create error function with bound parameters
+        error_func = lambda this, values, jacobians: gnss_carrier_phase_error(
+            residual, h_pos, h_clk, wavelength, this, values, jacobians)
+        
+        super().__init__(noise_model, [pose_key, clock_key, amb_key], error_func)
+        self.residual = residual
+        self.h_pos = h_pos
+        self.h_clk = h_clk
+        self.wavelength = wavelength
 
 
 def rtkpos_isam(nav, rov, base, fp_stat, dir=1):

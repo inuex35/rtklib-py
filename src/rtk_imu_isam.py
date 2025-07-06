@@ -233,7 +233,7 @@ class RtkImuISAM:
         
         # Add IMU factor if we have preintegrated measurements
         if self.current_preintegration and self.current_preintegration.deltaTij() > 0:
-            self._add_imu_factor(idx)
+            #self._add_imu_factor(idx)
             self.logger.info(f"Added IMU factor with dt={self.current_preintegration.deltaTij()}")
         else:
             self.logger.warning(f"No IMU preintegration available for idx {idx}")

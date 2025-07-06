@@ -6,7 +6,7 @@ Maintains RTKLib structure but uses ISAM2 for filtering
 import sys, os, shutil
 
 # Set run parameters
-maxepoch = 100  # Process 100 epochs for testing
+maxepoch = 1000  # Process 100 epochs for testing
 trace_level = 3  # Debug trace level
 basepos = []     # Default to not specified here
 
