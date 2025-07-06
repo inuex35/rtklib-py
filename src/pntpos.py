@@ -74,6 +74,10 @@ def rescode(iter, obs, nav, rs, dts, svh, x):
     trace(3, 'rescode: rr=%.3f %.3f %.3f\n' % (rr[0], rr[1], rr[2]))
     rcvstds(nav, obs) # decode stdevs from receiver
     
+    # デバッグ用：UNIX時間を出力
+    unix_time = obs.t.time + obs.t.sec
+    print(f"DEBUG: UNIX Time: {unix_time:.3f}")
+    
     nv = 0
     for i in np.argsort(obs.sat):
         sys = nav.sysprn[obs.sat[i]][0]
@@ -108,6 +112,12 @@ def rescode(iter, obs, nav, rs, dts, svh, x):
             continue
         # pseudorange residual
         v[nv] = P - (r + dtr - rCST.CLIGHT * dts[i] + dion + dtrp)
+        
+        # デバッグ用：衛星ごとの詳細情報を出力
+        sat_id = gn.sat2id(obs.sat[i])
+        print(f"DEBUG: Sat {sat_id:3s} | Pos: [{rs[i,0]:12.3f}, {rs[i,1]:12.3f}, {rs[i,2]:12.3f}] | "
+              f"Pseudorange: {P:12.3f} | Residual: {v[nv]:8.3f}")
+        
         trace(4, 'sat=%d: v=%.3f P=%.3f r=%.3f dtr=%.6f dts=%.6f dion=%.3f dtrp=%.3f\n' %
               (obs.sat[i],v[nv],P,r,dtr,dts[i],dion,dtrp))
         # design matrix 
@@ -142,6 +152,11 @@ def rescode(iter, obs, nav, rs, dts, svh, x):
     azv = azv[0:nv]
     elv = elv[0:nv]
     var = var[0:nv]
+    
+    # デバッグ用：エポック終了時の情報を出力
+    print(f"DEBUG: Epoch processed - Valid satellites: {nv}, Total residual RMS: {np.sqrt(np.mean(v**2)):.3f}")
+    print("=" * 80)
+    
     return v, H, azv, elv, var
 
 

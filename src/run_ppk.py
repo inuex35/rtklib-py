@@ -7,27 +7,62 @@ Copyright (c) 2022 Tim Everett
 import sys, os, shutil
 
 # set run parameters
-maxepoch = None # max # of epochs, used for debug, None = no limit
+maxepoch = 50 # max # of epochs, used for debug, None = no limit (limit for PPC-Dataset testing)
 trace_level = 3  # debug trace level
 basepos = []  # default to not specified here
 
 ######## specify input files ######################################
 
-# cell phone example from 2021 Google Smartphone Decimeter Challenge
-# datadir = r'C:\gps\python\rtklib-py\data\phone'
-# navfile = 'nav_1350.nav'
-# rovfile = 'Pixel4_GnssLog.obs'
-# basefile = 'slac1350.obs'
-# cfgfile = 'config_phone.py' # must be in src folder or absolute path
+# Get the directory where this script is located
+script_dir = os.path.dirname(os.path.abspath(__file__))
+current_dir = os.getcwd()
 
-# u-blox example
-datadir = '../data/u-blox'
-navfile = 'rover.nav'
-rovfile = 'rover.obs'
-basefile = 'tmg23590.obs'
-cfgfile = 'config_f9p.py'  # must be in src folder or absolute path
+# Check if we're running from examples/data directory (custom data)
+if current_dir.endswith('examples/data'):
+    # Use PPC-Dataset tokyo/run1 data
+    datadir = 'PPC-Dataset/tokyo/run1'
+    navfile = 'base.nav'
+    rovfile = 'rover.obs'
+    basefile = 'base.obs'
+    cfgfile = os.path.join(script_dir, 'config_ppc.py')  # Use PPC-specific config
+    print("Using PPC-Dataset tokyo/run1 data")
+elif current_dir.endswith('PPC-Dataset/tokyo/run1'):
+    # Running directly from the dataset directory
+    datadir = '.'
+    navfile = 'base.nav'
+    rovfile = 'rover.obs'
+    basefile = 'base.obs'
+    cfgfile = os.path.join(script_dir, 'config_ppc.py')  # Use PPC-specific config
+    print("Using PPC-Dataset tokyo/run1 data (direct)")
+else:
+    # Use original u-blox example data
+    datadir = '../data/u-blox'
+    navfile = 'rover.nav'
+    rovfile = 'rover.obs'
+    basefile = 'tmg23590.obs'
+    cfgfile = os.path.join(script_dir, 'config_f9p.py')
+    print("Using u-blox example data")
 
 ###################################################################
+
+# Debug information
+print(f"Current working directory: {current_dir}")
+print(f"Script directory: {script_dir}")
+print(f"Data directory: {datadir}")
+print(f"Config file path: {cfgfile}")
+print(f"Config file exists: {os.path.exists(cfgfile)}")
+print(f"Navigation file: {os.path.join(datadir, navfile)}")
+print(f"Rover file: {os.path.join(datadir, rovfile)}")
+print(f"Base file: {os.path.join(datadir, basefile)}")
+
+# Check if data files exist
+nav_path = os.path.join(datadir, navfile)
+rov_path = os.path.join(datadir, rovfile)
+base_path = os.path.join(datadir, basefile)
+
+print(f"Navigation file exists: {os.path.exists(nav_path)}")
+print(f"Rover file exists: {os.path.exists(rov_path)}")
+print(f"Base file exists: {os.path.exists(base_path)}")
 
 # Copy config file
 shutil.copyfile(cfgfile, '__ppk_config.py')
@@ -42,14 +77,14 @@ from postpos import procpos, savesol
 # generate output file names
 solfile = rovfile[:-4] + '.pos'
 statfile = os.path.join(datadir, rovfile[:-4] + '.pos.stat')
+
+# Create output directory if it doesn't exist
+os.makedirs(datadir, exist_ok=True)
+
 fp_stat = open(statfile, 'w')
 if trace_level > 0:
     trcfile = os.path.join(datadir, rovfile[:-4] + '.trace')
     sys.stderr = open(trcfile, "w")
-    
-# Read config file
-shutil.copyfile(cfgfile, '__ppk_config.py')
-
 
 # init solution
 os.chdir(datadir)
