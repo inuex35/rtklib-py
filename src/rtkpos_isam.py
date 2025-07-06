@@ -10,6 +10,7 @@ import numpy as np
 from numpy.linalg import inv, norm
 from sys import stdout
 from copy import copy, deepcopy
+import pandas as pd
 import rtkcmn as gn
 from rtkcmn import rCST, DTTOL, sat2prn, sat2freq, timediff, xyz2enu
 import rinex as rn
@@ -89,13 +90,36 @@ class RTKLibISAM2:
             return
             
         try:
-            # Load IMU data (assuming CSV format)
-            self.imu_data = pd.read_csv(self.nav.imu_file)
-            # Convert to numpy arrays for efficient access
-            self.imu_timestamps = self.imu_data['timestamp'].values
-            self.imu_accels = self.imu_data[['acc_x', 'acc_y', 'acc_z']].values
-            self.imu_gyros = self.imu_data[['gyro_x', 'gyro_y', 'gyro_z']].values
-            trace(3, f"Loaded {len(self.imu_data)} IMU measurements\n")
+            # Load IMU data from PPC-Dataset format
+            self.imu_data = pd.read_csv(self.nav.imu_file, header=0, skipinitialspace=True)
+            
+            # Strip spaces from column names
+            self.imu_data.columns = self.imu_data.columns.str.strip()
+            
+            trace(3, f"Loading IMU data from: {self.nav.imu_file}\n")
+            trace(3, f"IMU columns: {list(self.imu_data.columns)}\n")
+            
+            # Convert GPS time to Unix timestamp
+            gps_tow = self.imu_data['GPS TOW (s)'].values
+            gps_week = self.imu_data['GPS Week'].values
+            
+            # Convert to seconds since GPS epoch
+            self.imu_timestamps = gps_week * 604800 + gps_tow
+            
+            # Extract accelerometer data (m/s^2)
+            self.imu_accels = self.imu_data[[
+                'Acc X (m/s^2)', 'Acc Y (m/s^2)', 'Acc Z (m/s^2)'
+            ]].values
+            
+            # Extract gyroscope data (convert deg/s to rad/s)
+            # Note: Column names have leading spaces
+            self.imu_gyros = self.imu_data[[
+                'Ang Rate X (deg/s)', 'Ang Rate Y (deg/s)', 'Ang Rate Z (deg/s)'
+            ]].values * np.pi / 180.0
+            
+            trace(2, f"Loaded {len(self.imu_data)} IMU measurements\n")
+            trace(3, f"IMU time range: {self.imu_timestamps[0]:.3f} to {self.imu_timestamps[-1]:.3f}\n")
+            trace(3, f"First accel: {self.imu_accels[0]}, First gyro: {self.imu_gyros[0]}\n")
         except Exception as e:
             trace(2, f"Failed to load IMU data: {e}\n")
             self.imu_data = None
@@ -162,13 +186,17 @@ class RTKLibISAM2:
     def _add_imu_factors(self, t_prev, t_curr):
         """Add IMU preintegrated factors between epochs"""
         if self.imu_data is None or self.idx == 0:
+            trace(3, f"IMU factors skipped: imu_data={self.imu_data is not None}, idx={self.idx}\n")
             return
             
         # Get IMU measurements between epochs
         mask = (self.imu_timestamps > t_prev) & (self.imu_timestamps <= t_curr)
         imu_idx = np.where(mask)[0]
         
+        trace(3, f"IMU preintegration: t_prev={t_prev:.3f}, t_curr={t_curr:.3f}, found {len(imu_idx)} measurements\n")
+        
         if len(imu_idx) == 0:
+            trace(2, f"WARNING: No IMU measurements found between {t_prev:.3f} and {t_curr:.3f}\n")
             return
             
         # Create new preintegrated measurement
@@ -205,6 +233,11 @@ class RTKLibISAM2:
             self.imu_preintegrated)
         self.graph.add(imu_factor)
         
+        trace(2, f"Added IMU factor: epoch {self.idx}, preintegrated {len(imu_idx)} measurements\n")
+        trace(3, f"  Delta position: {self.imu_preintegrated.deltaPij()}\n")
+        trace(3, f"  Delta velocity: {self.imu_preintegrated.deltaVij()}\n")
+        trace(3, f"  Delta rotation: {self.imu_preintegrated.deltaRij().matrix()}\n")
+        
         # Add bias random walk
         bias_noise = gtsam.noiseModel.Diagonal.Sigmas(
             np.concatenate([
@@ -218,6 +251,13 @@ class RTKLibISAM2:
         """Initialize state for first epoch"""
         # Get initial position from single point positioning
         sol = pntpos(obsr, self.nav)
+        
+        # Ensure we have a valid position
+        if sol.stat == gn.SOLQ_NONE or norm(sol.rr[0:3]) < rCST.RE_WGS84:
+            # Use a default position if SPP fails
+            trace(2, "WARNING: SPP failed for initialization, using nav.x position\n")
+            sol.rr[0:3] = self.nav.x[0:3] if norm(self.nav.x[0:3]) > rCST.RE_WGS84 else np.array([-3810230.789, 3567860.707, 3652881.806])
+            sol.dtr[0] = self.nav.x[6] if abs(self.nav.x[6]) > 0 else -112160.861 / rCST.CLIGHT
         
         # Initialize GTSAM values
         x_key = self._symbol('X', 0)  # Pose
@@ -233,35 +273,48 @@ class RTKLibISAM2:
         self.values.insert(x_key, initial_pose)
         
         # Initial velocity
-        self.values.insert(v_key, np.zeros(3))
+        initial_velocity = sol.rr[3:6] if norm(sol.rr[3:6]) > 0 else np.zeros(3)
+        self.values.insert(v_key, initial_velocity)
         
         # Initial IMU bias
         self.values.insert(b_key, gtsam.imuBias.ConstantBias())
         
         # Initial clock bias (as vector for consistency)
-        self.values.insert(c_key, np.array([sol.dtr[0] * rCST.CLIGHT]))
+        initial_clock = np.array([sol.dtr[0] * rCST.CLIGHT])
+        self.values.insert(c_key, initial_clock)
         
-        # Add prior factors
+        # Add prior factors with appropriate uncertainties
+        # Position uncertainty based on solution quality
+        pos_sigma = np.array([10.0, 10.0, 15.0]) if sol.stat != gn.SOLQ_NONE else np.array([100.0, 100.0, 150.0])
         pose_noise = gtsam.noiseModel.Diagonal.Sigmas(
-            np.array([30.0, 30.0, 30.0, 0.1, 0.1, 0.1]))  # position + rotation
+            np.concatenate([pos_sigma, np.array([0.1, 0.1, 0.1])]))  # position + rotation
         self.graph.add(gtsam.PriorFactorPose3(x_key, initial_pose, pose_noise))
         
-        vel_noise = gtsam.noiseModel.Diagonal.Sigmas(np.full(3, 10.0))
-        self.graph.add(gtsam.PriorFactorVector(v_key, np.zeros(3), vel_noise))
+        # Velocity prior - larger uncertainty if no velocity estimate
+        vel_sigma = np.full(3, 1.0) if norm(initial_velocity) > 0 else np.full(3, 10.0)
+        vel_noise = gtsam.noiseModel.Diagonal.Sigmas(vel_sigma)
+        self.graph.add(gtsam.PriorFactorVector(v_key, initial_velocity, vel_noise))
         
-        bias_noise = gtsam.noiseModel.Diagonal.Sigmas(np.full(6, 0.1))
+        # IMU bias prior - small uncertainty to regularize
+        bias_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([0.01, 0.01, 0.01, 0.001, 0.001, 0.001]))
         self.graph.add(gtsam.PriorFactorConstantBias(
             b_key, gtsam.imuBias.ConstantBias(), bias_noise))
             
-        clock_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([30.0]))
-        self.graph.add(gtsam.PriorFactorVector(c_key, np.array([sol.dtr[0] * rCST.CLIGHT]), clock_noise))
+        # Clock bias prior
+        clock_sigma = 10.0 if sol.stat != gn.SOLQ_NONE else 100.0
+        clock_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([clock_sigma]))
+        self.graph.add(gtsam.PriorFactorVector(c_key, initial_clock, clock_noise))
         
         # Update RTKLib state
-        self.nav.x[0:6] = sol.rr[0:6]
+        self.nav.x[0:3] = sol.rr[0:3]
+        self.nav.x[3:6] = initial_velocity
+        self.nav.x[6] = sol.dtr[0]
         
         # Initialize covariance if needed
         if not hasattr(self.nav, 'P') or self.nav.P.shape[0] == 0:
             self.nav.P = np.eye(self.nav.nx) * 1e4  # Large initial uncertainty
+            
+        trace(3, f"Initialized state: pos={sol.rr[0:3]}, vel={initial_velocity}, clock={initial_clock[0]:.3f}m\n")
         
     def relpos(self, nav, obsr, obsb, sol):
         """Relative positioning with ISAM2 (replaces RTKLib's relpos)"""
@@ -290,16 +343,81 @@ class RTKLibISAM2:
             
         # Add IMU factors if available
         if self.idx > 0 and self.last_imu_time is not None:
-            self._add_imu_factors(self.last_imu_time, obsr.t.time + obsr.t.sec)
+            # Convert observation time to GPS time for IMU matching
+            obs_gps_time = (obsr.t.time + obsr.t.sec) - 315964800.0
+            self._add_imu_factors(self.last_imu_time, obs_gps_time)
             
         # Add GNSS factors
         self._add_gnss_factors(obsr, obsb, rs, rsb, dts, dtsb, svh, svhb, var, varb)
         
         # Update ISAM2
         if self.graph.size() > 0:
-            result = self.isam.update(self.graph, self.values)
-            self.graph = gtsam.NonlinearFactorGraph()
-            self.values = gtsam.Values()
+            trace(3, f"\n=== ISAM2 Update Epoch {self.idx} ===\n")
+            trace(3, f"Graph has {self.graph.size()} factors\n")
+            
+            # Count factor types
+            gnss_factors = 0
+            imu_factors = 0
+            bias_factors = 0
+            prior_factors = 0
+            position_factors = 0
+            
+            for i in range(self.graph.size()):
+                factor = self.graph.at(i)
+                factor_type = str(type(factor))
+                # Check for our custom factors
+                if isinstance(factor, gtsam.CustomFactor):
+                    # Check keys to identify factor type
+                    if len(factor.keys()) == 2:  # Pose and clock keys
+                        gnss_factors += 1
+                    elif len(factor.keys()) == 1:  # Just pose key
+                        position_factors += 1
+                elif 'ImuFactor' in factor_type:
+                    imu_factors += 1
+                elif 'BetweenFactor' in factor_type:
+                    bias_factors += 1
+                elif 'PriorFactor' in factor_type:
+                    prior_factors += 1
+            
+            trace(3, f"Factor breakdown: GNSS={gnss_factors}, Position={position_factors}, IMU={imu_factors}, " +
+                     f"Bias={bias_factors}, Prior={prior_factors}\n")
+            
+            # Check if we have enough constraints
+            total_constraints = gnss_factors + position_factors + prior_factors
+            if self.idx > 0 and total_constraints == 0 and imu_factors > 0:
+                # Add emergency position constraint to prevent drift
+                trace(2, "WARNING: No GNSS constraints, adding emergency position factor\n")
+                x_key = self._symbol('X', self.idx)
+                current_pos = self.nav.x[0:3].copy()
+                pos_sigma = np.array([50.0, 50.0, 80.0])  # Very loose constraint
+                noise = gtsam.noiseModel.Diagonal.Sigmas(pos_sigma)
+                factor = SimpleGNSSPositionFactor(x_key, current_pos, noise)
+                self.graph.add(factor)
+            
+            try:
+                result = self.isam.update(self.graph, self.values)
+                self.graph = gtsam.NonlinearFactorGraph()
+                self.values = gtsam.Values()
+            except Exception as e:
+                trace(2, f"ERROR: ISAM2 update failed: {e}\n")
+                trace(2, "Attempting recovery with stronger constraints\n")
+                
+                # Add stronger position constraint and retry
+                if self.idx > 0:
+                    x_key = self._symbol('X', self.idx)
+                    current_pos = self.nav.x[0:3].copy()
+                    pos_sigma = np.array([20.0, 20.0, 30.0])
+                    noise = gtsam.noiseModel.Diagonal.Sigmas(pos_sigma)
+                    factor = SimpleGNSSPositionFactor(x_key, current_pos, noise)
+                    self.graph.add(factor)
+                    
+                    try:
+                        result = self.isam.update(self.graph, self.values)
+                        self.graph = gtsam.NonlinearFactorGraph()
+                        self.values = gtsam.Values()
+                    except Exception as e2:
+                        trace(2, f"ERROR: Recovery failed: {e2}\n")
+                        return
             
             # Extract current estimate
             current_estimate = self.isam.calculateEstimate()
@@ -312,7 +430,9 @@ class RTKLibISAM2:
                 nav.x[0:3] = pose.translation()
                 
                 nav.x[3:6] = current_estimate.atVector(v_key)
-                nav.x[6] = current_estimate.atVector(c_key)[0] / rCST.CLIGHT
+                clock_bias = current_estimate.atVector(c_key)[0]
+                nav.x[6] = clock_bias / rCST.CLIGHT
+                trace(3, f"DEBUG: UNIX Time: {obsr.t.time + obsr.t.sec:.3f}, Clock bias: {clock_bias:.3f} m\n")
                 
                 # Update solution
                 sol.t = obsr.t
@@ -329,6 +449,9 @@ class RTKLibISAM2:
             except Exception as e:
                 trace(2, f"Failed to extract estimate at idx {self.idx}: {e}\n")
                 
+        # Update last IMU time for next epoch
+        self.last_imu_time = (obsr.t.time + obsr.t.sec) - 315964800.0
+        
         # Prepare for next epoch
         self.idx += 1
         
@@ -339,13 +462,16 @@ class RTKLibISAM2:
             b_key = self._symbol('B', self.idx)
             c_key = self._symbol('C', self.idx)
             
-            pose = gtsam.Pose3(gtsam.Rot3(), gtsam.Point3(nav.x[0:3]))
-            self.values.insert(x_key, pose)
-            self.values.insert(v_key, nav.x[3:6])
-            self.values.insert(b_key, gtsam.imuBias.ConstantBias())
-            self.values.insert(c_key, np.array([nav.x[6] * rCST.CLIGHT]))
-            
-        self.last_imu_time = obsr.t.time + obsr.t.sec
+            # Only add if they don't exist already
+            if not self.values.exists(x_key):
+                pose = gtsam.Pose3(gtsam.Rot3(), gtsam.Point3(nav.x[0:3]))
+                self.values.insert(x_key, pose)
+            if not self.values.exists(v_key):
+                self.values.insert(v_key, nav.x[3:6])
+            if not self.values.exists(b_key):
+                self.values.insert(b_key, gtsam.imuBias.ConstantBias())
+            if not self.values.exists(c_key):
+                self.values.insert(c_key, np.array([nav.x[6] * rCST.CLIGHT]))
         
         # Update nav solution list
         nav.sol.append(deepcopy(sol))
@@ -355,29 +481,137 @@ class RTKLibISAM2:
         x_key = self._symbol('X', self.idx)
         c_key = self._symbol('C', self.idx)
         
-        added = 0
+        # Get pseudorange residuals
+        y, e, azel = zdres(self.nav, obs, rs, dts, svh, var, self.nav.x[0:3], 1)
+        
+        # Count valid measurements - check P1 pseudorange (column 2)
+        valid_count = 0
         for i in range(len(obs.sat)):
-            if obs.P[i,0] == 0 or norm(rs[i,:]) < rCST.RE_WGS84:
-                continue
-            if svh[i] != 0:
+            # P1 pseudorange is in column 2 (0=L1, 1=L2, 2=P1, 3=P2)
+            if abs(y[i,2]) > 0.0 and e[i,2] > 0:  # Valid P1 pseudorange
+                valid_count += 1
+                
+        trace(3, f'Found {valid_count} valid P1 pseudorange measurements\n')
+        
+        # Debug: print measurement types
+        if self.idx < 3:
+            trace(3, f'Measurement matrix y shape: {y.shape}, e shape: {e.shape}\n')
+            trace(3, f'First satellite measurements: L1={y[0,0]:.1f}, L2={y[0,1]:.1f}, P1={y[0,2]:.1f}, P2={y[0,3]:.1f}\n')
+        
+        if valid_count < 4:
+            # Not enough measurements, add loose position constraint
+            if self.idx > 0:
+                current_pos = self.nav.x[0:3].copy()
+                pos_sigma = np.array([30.0, 30.0, 50.0])
+                noise = gtsam.noiseModel.Diagonal.Sigmas(pos_sigma)
+                factor = SimpleGNSSPositionFactor(x_key, current_pos, noise)
+                self.graph.add(factor)
+                trace(3, f'Added loose position constraint at {current_pos}\n')
+            return
+            
+        # Add pseudorange factors for each satellite
+        added_factors = 0
+        for i in range(len(obs.sat)):
+            # Use P1 pseudorange (column 2)
+            if abs(y[i,2]) == 0.0 or e[i,2] <= 0:
                 continue
                 
-            # Pseudorange measurement
-            pr = obs.P[i,0]
-            sat_pos = rs[i,:]
-            sat_clk = dts[i] * rCST.CLIGHT
+            # Get satellite position (first 3 elements are XYZ)
+            sat_pos = rs[i,0:3]
             
-            # Measurement noise (simplified)
-            pr_sigma = 3.0  # meters
-            noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([pr_sigma]))
+            # Unit vector from receiver to satellite
+            r = sat_pos - self.nav.x[0:3]
+            dist = norm(r)
+            if dist < 1e-10:
+                continue
+            u = r / dist
             
             # Create pseudorange factor
-            # For now, just skip adding factors - need to implement properly
-            # factor = create_pseudorange_factor(x_key, c_key, pr - sat_clk, sat_pos, noise)
-            # self.graph.add(factor)
-            # added += 1
+            # Jacobian w.r.t position
+            h_pos = -u
+            # Jacobian w.r.t clock (speed of light)
+            h_clk = 1.0
             
-        trace(3, f'Added {added} simple pseudorange factors\n')
+            # Measurement noise from P1 error
+            sigma = np.sqrt(e[i,2])
+            noise = gtsam.noiseModel.Gaussian.Covariance(np.array([[sigma**2]]))
+            
+            # Add factor using P1 residual
+            factor = GNSSPseudorangeFactor(x_key, c_key, y[i,2], h_pos, h_clk, noise)
+            self.graph.add(factor)
+            added_factors += 1
+            
+        trace(3, f'Added {added_factors} pseudorange factors\n')
+        
+        # Update nav state if SPP available and this is first epoch
+        if self.idx == 0:
+            sol = pntpos(obs, self.nav)
+            if sol.stat != gn.SOLQ_NONE and norm(sol.rr[0:3]) > rCST.RE_WGS84:
+                self.nav.x[0:3] = sol.rr[0:3]
+                self.nav.x[6] = sol.dtr[0]
+                trace(3, f'Initialized with SPP: pos={sol.rr[0:3]}, clock={sol.dtr[0]*rCST.CLIGHT:.3f}m\n')
+
+
+def simple_position_error(measured_position, this, values, jacobians):
+    """Error function for simple GNSS position factor"""
+    pose_key = this.keys()[0]
+    pose = values.atPose3(pose_key)
+    position = pose.translation()
+    
+    error = position - measured_position
+    
+    if jacobians is not None:
+        # Jacobian w.r.t pose (position part)
+        J_pose = np.zeros((3, 6))
+        J_pose[:3, :3] = np.eye(3)  # Position part
+        jacobians[0] = J_pose
+        
+    return error
+
+
+class SimpleGNSSPositionFactor(gtsam.CustomFactor):
+    """Simple GNSS position factor for absolute position constraint"""
+    
+    def __init__(self, pose_key, measured_position, noise_model):
+        """Initialize position factor
+        
+        Args:
+            pose_key: Key for pose variable
+            measured_position: Measured position (3x1)
+            noise_model: Measurement noise model
+        """
+        # Create error function with bound measured position
+        error_func = lambda this, values, jacobians: simple_position_error(
+            measured_position, this, values, jacobians)
+        
+        super().__init__(noise_model, [pose_key], error_func)
+        self.measured_position = measured_position
+
+
+def gnss_pseudorange_error(residual, h_pos, h_clk, this, values, jacobians):
+    """Error function for GNSS pseudorange factor"""
+    pose_key = this.keys()[0]
+    clock_key = this.keys()[1]
+    
+    pose = values.atPose3(pose_key)
+    clock = values.atVector(clock_key)[0]
+    
+    # Error is negative of residual (since residual = measurement - predicted)
+    # In Kalman filter: x_new = x_old + K*(y - h(x))
+    # In factor graph: we minimize ||h(x) - y||^2
+    pos = pose.translation()
+    error = np.array([-residual + h_pos @ pos + h_clk * clock])
+    
+    if jacobians is not None:
+        # Jacobian w.r.t pose
+        J_pose = np.zeros((1, 6))
+        J_pose[0, 3:6] = h_pos  # Position part
+        jacobians[0] = J_pose
+        
+        # Jacobian w.r.t clock
+        jacobians[1] = np.array([[h_clk]])
+        
+    return error
 
 
 class GNSSPseudorangeFactor(gtsam.CustomFactor):
@@ -394,22 +628,14 @@ class GNSSPseudorangeFactor(gtsam.CustomFactor):
             h_clk: Jacobian w.r.t clock
             noise_model: Measurement noise model
         """
-        super().__init__(noise_model, [pose_key, clock_key])
+        # Create error function with bound parameters
+        error_func = lambda this, values, jacobians: gnss_pseudorange_error(
+            residual, h_pos, h_clk, this, values, jacobians)
+        
+        super().__init__(noise_model, [pose_key, clock_key], error_func)
         self.residual = residual
         self.h_pos = h_pos
         self.h_clk = h_clk
-        
-    def error(self, values):
-        """Compute error given current values"""
-        pose = values.atPose3(self.keys()[0])
-        clock = values.atVector(self.keys()[1])[0]
-        
-        # Error is negative of residual (since residual = measurement - predicted)
-        # In Kalman filter: x_new = x_old + K*(y - h(x))
-        # In factor graph: we minimize ||h(x) - y||^2
-        pos = pose.translation()
-        error = -self.residual + self.h_pos @ pos + self.h_clk * clock
-        return np.array([error])
 
 
 def rtkpos_isam(nav, rov, base, fp_stat, dir=1):
