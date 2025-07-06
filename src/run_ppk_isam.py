@@ -6,12 +6,12 @@ Maintains RTKLib structure but uses ISAM2 for filtering
 import sys, os, shutil
 
 # Set run parameters
-maxepoch = 100  # Process 100 epochs
+maxepoch = 1000  # Process 100 epochs
 trace_level = 3  # Debug trace level
 basepos = []     # Default to not specified here
 
 # Specify input files for PPC-Dataset
-datadir = '../../examples/data/PPC-Dataset/nagoya/run1'
+datadir = '../../examples/data/PPC-Dataset/tokyo/run1'
 navfile = 'base.nav'
 rovfile = 'rover.obs'
 basefile = 'base.obs'
@@ -121,3 +121,14 @@ try:
 finally:
     # Return to original directory
     os.chdir(original_dir)
+    
+    # Plot results
+    try:
+        import subprocess
+        print("\nPlotting results...")
+        plot_script = os.path.join(script_dir, 'plot_pos.py')
+        subprocess.run([sys.executable, plot_script, solfile, '--output', datadir], check=True)
+    except Exception as e:
+        print(f"Failed to plot results: {e}")
+        print(f"You can manually plot the results using:")
+        print(f"  python plot_pos.py {solfile}")
