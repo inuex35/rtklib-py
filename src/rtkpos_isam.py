@@ -73,15 +73,15 @@ class RTKLibISAM2:
         # Check if IMU loader exists
         if hasattr(self.nav, 'imu_loader') and self.nav.imu_loader:
             # Get IMU noise parameters from config
-            accel_noise_sigma = getattr(cfg, 'accel_noise_sigma', 0.01)
-            gyro_noise_sigma = getattr(cfg, 'gyro_noise_sigma', 0.001)
-            accel_bias_rw_sigma = getattr(cfg, 'accel_bias_rw_sigma', 0.0001)
-            gyro_bias_rw_sigma = getattr(cfg, 'gyro_bias_rw_sigma', 0.00001)
+            accel_noise_sigma = getattr(cfg, 'accel_noise_sigma', 0.1)
+            gyro_noise_sigma = getattr(cfg, 'gyro_noise_sigma', 0.05)
+            accel_bias_rw_sigma = getattr(cfg, 'accel_bias_rw_sigma', 0.01)
+            gyro_bias_rw_sigma = getattr(cfg, 'gyro_bias_rw_sigma', 0.01)
             
             self.imu_params = gtsam.PreintegrationParams.MakeSharedU(9.81)
             self.imu_params.setAccelerometerCovariance(np.eye(3) * accel_noise_sigma**2)
             self.imu_params.setGyroscopeCovariance(np.eye(3) * gyro_noise_sigma**2)
-            self.imu_params.setIntegrationCovariance(np.eye(3) * 1e-7)
+            self.imu_params.setIntegrationCovariance(np.eye(3) * 1e-3)
             self.imu_params.setOmegaCoriolis(np.zeros(3))  # Ignore Earth rotation for now
             
             # Load IMU data
@@ -185,6 +185,8 @@ class RTKLibISAM2:
         if len(imu_idx) == 0:
             return
             
+        trace(3, f"Adding IMU factors: {len(imu_idx)} measurements between {t_prev:.3f} and {t_curr:.3f}\n")
+            
         # Create new preintegrated measurement
         if self.imu_preintegrated is None:
             # Get initial bias estimate
@@ -221,7 +223,7 @@ class RTKLibISAM2:
         imu_factor = gtsam.ImuFactor(
             x_prev, v_prev, x_curr, v_curr, b_prev,
             self.imu_preintegrated)
-        #self.graph.add(imu_factor)
+        self.graph.add(imu_factor)
         
         # Add bias random walk
         bias_noise = gtsam.noiseModel.Diagonal.Sigmas(

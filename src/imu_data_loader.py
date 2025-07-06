@@ -222,8 +222,8 @@ class ImuDataLoader:
         for _, row in filtered_data.iterrows():
             meas = ImuMeasurement(
                 timestamp=row['timestamp'] + self.time_offset,  # Convert back to GPS time
-                accelerometer=np.array([row['ax'], row['ay'], row['az']]),
-                gyroscope=np.array([row['wx'], row['wy'], row['wz']])
+                accelerometer=np.array([row['ax'], - row['ay'], - row['az']]),
+                gyroscope=np.array([row['wx'], - row['wy'], - row['wz']])
             )
             measurements.append(meas)
             

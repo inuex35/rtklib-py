@@ -100,4 +100,4 @@ imu_rate = 100.0  # Hz
 # IMU to GPS time offset (if any)
 imu_time_offset = 0.0  # seconds
 # IMU data file
-imu_file = '../examples/data/PPC-Dataset/nagoya/run1/imu.csv'
+imu_file = '../../examples/data/PPC-Dataset/tokyo/run1/imu.csv'
