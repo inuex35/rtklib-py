@@ -74,9 +74,10 @@ def rescode(iter, obs, nav, rs, dts, svh, x):
     trace(3, 'rescode: rr=%.3f %.3f %.3f\n' % (rr[0], rr[1], rr[2]))
     rcvstds(nav, obs) # decode stdevs from receiver
     
-    # デバッグ用：UNIX時間を出力
+    # デバッグ用：UNIX時間とクロックバイアスを出力
     unix_time = obs.t.time + obs.t.sec
     print(f"DEBUG: UNIX Time: {unix_time:.3f}")
+    print(f"DEBUG: Clock bias: {dtr:.3f} m ({dtr/rCST.CLIGHT*1e9:.3f} ns)")
     
     nv = 0
     for i in np.argsort(obs.sat):
@@ -116,7 +117,8 @@ def rescode(iter, obs, nav, rs, dts, svh, x):
         # デバッグ用：衛星ごとの詳細情報を出力
         sat_id = gn.sat2id(obs.sat[i])
         print(f"DEBUG: Sat {sat_id:3s} | Pos: [{rs[i,0]:12.3f}, {rs[i,1]:12.3f}, {rs[i,2]:12.3f}] | "
-              f"Pseudorange: {P:12.3f} | Residual: {v[nv]:8.3f}")
+              f"Pseudorange: {P:12.3f} | Residual: {v[nv]:8.3f} | "
+              f"SatClk: {dts[i]*1e9:6.1f} ns")
         
         trace(4, 'sat=%d: v=%.3f P=%.3f r=%.3f dtr=%.6f dts=%.6f dion=%.3f dtrp=%.3f\n' %
               (obs.sat[i],v[nv],P,r,dtr,dts[i],dion,dtrp))
@@ -155,6 +157,7 @@ def rescode(iter, obs, nav, rs, dts, svh, x):
     
     # デバッグ用：エポック終了時の情報を出力
     print(f"DEBUG: Epoch processed - Valid satellites: {nv}, Total residual RMS: {np.sqrt(np.mean(v**2)):.3f}")
+    print(f"DEBUG: Current clock bias: {dtr:.3f} m ({dtr/rCST.CLIGHT*1e9:.3f} ns)")
     print("=" * 80)
     
     return v, H, azv, elv, var
@@ -180,6 +183,8 @@ def estpos(obs, nav, rs, dts, svh):
         # least square estimation
         dx = lstsq(H, v, rcond=None)[0]
         x += dx
+        print(f"DEBUG: LSQ iteration {iter}: dx=[{dx[0]:.3f}, {dx[1]:.3f}, {dx[2]:.3f}, {dx[3]:.3f}] m")
+        print(f"DEBUG: Updated clock bias: {x[3]:.3f} m ({x[3]/rCST.CLIGHT*1e9:.3f} ns)")
         if norm(dx) < 1e-4:
             break
     else: # exceeded max iterations
