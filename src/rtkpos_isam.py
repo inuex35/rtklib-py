@@ -48,6 +48,8 @@ class RTKLibISAM2:
         params = gtsam.ISAM2Params()
         params.setRelinearizeThreshold(0.1)
         params.relinearizeSkip = 10
+        params.enableRelinearization = True
+        params.evaluateNonlinearError = False  # Faster updates
         self.isam = gtsam.ISAM2(params)
         
         # Factor graph and values
@@ -596,20 +598,19 @@ def gnss_pseudorange_error(residual, h_pos, h_clk, this, values, jacobians):
     pose = values.atPose3(pose_key)
     clock = values.atVector(clock_key)[0]
     
-    # Error is negative of residual (since residual = measurement - predicted)
-    # In Kalman filter: x_new = x_old + K*(y - h(x))
-    # In factor graph: we minimize ||h(x) - y||^2
-    pos = pose.translation()
-    error = np.array([-residual + h_pos @ pos + h_clk * clock])
+    # The residual from zdres is already (measurement - predicted)
+    # We just need to return it as the error
+    # zdres computes: y = measured - predicted, so error = -y for minimization
+    error = np.array([-residual])
     
     if jacobians is not None:
-        # Jacobian w.r.t pose
+        # Jacobian w.r.t pose (only position part affects pseudorange)
         J_pose = np.zeros((1, 6))
-        J_pose[0, 3:6] = h_pos  # Position part
+        J_pose[0, 3:6] = -h_pos  # Negative because error = -(meas - pred)
         jacobians[0] = J_pose
         
         # Jacobian w.r.t clock
-        jacobians[1] = np.array([[h_clk]])
+        jacobians[1] = np.array([[-h_clk]])
         
     return error
 
