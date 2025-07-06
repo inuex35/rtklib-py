@@ -60,19 +60,22 @@ class RTKLibISAM2:
         self.imu_params = None
         self.imu_preintegrated = None
         self.last_imu_time = None
+        self.imu_timestamps = None
+        self.imu_accels = None
+        self.imu_gyros = None
         
         # Initialize IMU if available
         self._init_imu()
         
     def _init_imu(self):
         """Initialize IMU parameters and preintegration"""
-        # Check if IMU configuration exists
-        if hasattr(self.nav, 'imu_file') and self.nav.imu_file:
-            # IMU noise parameters (from config or defaults)
-            accel_noise_sigma = getattr(self.nav, 'accel_noise_sigma', 0.01)
-            gyro_noise_sigma = getattr(self.nav, 'gyro_noise_sigma', 0.001)
-            accel_bias_rw_sigma = getattr(self.nav, 'accel_bias_rw_sigma', 0.0001)
-            gyro_bias_rw_sigma = getattr(self.nav, 'gyro_bias_rw_sigma', 0.00001)
+        # Check if IMU loader exists
+        if hasattr(self.nav, 'imu_loader') and self.nav.imu_loader:
+            # Get IMU noise parameters from config
+            accel_noise_sigma = getattr(cfg, 'accel_noise_sigma', 0.01)
+            gyro_noise_sigma = getattr(cfg, 'gyro_noise_sigma', 0.001)
+            accel_bias_rw_sigma = getattr(cfg, 'accel_bias_rw_sigma', 0.0001)
+            gyro_bias_rw_sigma = getattr(cfg, 'gyro_bias_rw_sigma', 0.00001)
             
             self.imu_params = gtsam.PreintegrationParams.MakeSharedU(9.81)
             self.imu_params.setAccelerometerCovariance(np.eye(3) * accel_noise_sigma**2)
@@ -85,20 +88,21 @@ class RTKLibISAM2:
             
     def _load_imu_data(self):
         """Load IMU data from file"""
-        if not hasattr(self.nav, 'imu_file'):
+        if not hasattr(self.nav, 'imu_loader'):
             return
             
-        try:
-            # Load IMU data (assuming CSV format)
-            self.imu_data = pd.read_csv(self.nav.imu_file)
-            # Convert to numpy arrays for efficient access
-            self.imu_timestamps = self.imu_data['timestamp'].values
-            self.imu_accels = self.imu_data[['acc_x', 'acc_y', 'acc_z']].values
-            self.imu_gyros = self.imu_data[['gyro_x', 'gyro_y', 'gyro_z']].values
-            trace(3, f"Loaded {len(self.imu_data)} IMU measurements\n")
-        except Exception as e:
-            trace(2, f"Failed to load IMU data: {e}\n")
-            self.imu_data = None
+        # Use the IMU loader to get data
+        loader = self.nav.imu_loader
+        if loader.timestamps is not None:
+            self.imu_timestamps = loader.timestamps
+            self.imu_accels = loader.accelerations
+            self.imu_gyros = loader.angular_velocities
+            trace(3, f"Using IMU data: {len(self.imu_timestamps)} measurements\n")
+        else:
+            trace(2, "No IMU data available from loader\n")
+            self.imu_timestamps = None
+            self.imu_accels = None
+            self.imu_gyros = None
             
     def _symbol(self, key_char, idx):
         """Create GTSAM symbol"""
@@ -161,7 +165,7 @@ class RTKLibISAM2:
                 
     def _add_imu_factors(self, t_prev, t_curr):
         """Add IMU preintegrated factors between epochs"""
-        if self.imu_data is None or self.idx == 0:
+        if self.imu_timestamps is None or self.idx == 0:
             return
             
         # Get IMU measurements between epochs
@@ -192,6 +196,8 @@ class RTKLibISAM2:
             self.imu_preintegrated.integrateMeasurement(
                 self.imu_accels[i], self.imu_gyros[i], dt)
                 
+        trace(3, f'Added {len(imu_idx)} IMU measurements between epochs\n')
+        
         # Add IMU factor
         x_prev = self._symbol('X', self.idx - 1)
         v_prev = self._symbol('V', self.idx - 1) 
@@ -290,7 +296,9 @@ class RTKLibISAM2:
             
         # Add IMU factors if available
         if self.idx > 0 and self.last_imu_time is not None:
-            self._add_imu_factors(self.last_imu_time, obsr.t.time + obsr.t.sec)
+            # Convert observation time to GPS TOW for comparison with IMU timestamps
+            current_gps_tow = obsr.t.time + obsr.t.sec
+            self._add_imu_factors(self.last_imu_time, current_gps_tow)
             
         # Add GNSS factors
         self._add_gnss_factors(obsr, obsb, rs, rsb, dts, dtsb, svh, svhb, var, varb)

@@ -41,8 +41,12 @@ class ImuLoader:
             return False
             
         try:
-            # Check if PPC-Dataset format
-            if 'PPC-Dataset' in str(imu_file):
+            # Try to detect format by reading the header
+            with open(imu_file, 'r') as f:
+                header = f.readline()
+            
+            # Check if PPC-Dataset format by looking for characteristic columns
+            if 'GPS TOW' in header and 'GPS Week' in header:
                 self._load_ppc_dataset(imu_file)
             else:
                 # Generic CSV format
@@ -58,24 +62,39 @@ class ImuLoader:
     def _load_ppc_dataset(self, imu_file):
         """Load PPC-Dataset IMU format
         
-        Format: GPSWeek,GPSTime,ax,ay,az,wx,wy,wz,status
+        Format: GPS TOW (s), GPS Week, Acc X (m/s^2), Acc Y (m/s^2), Acc Z (m/s^2), 
+                Ang Rate X (deg/s), Ang Rate Y (deg/s), Ang Rate Z (deg/s)
         """
-        # Read CSV
+        # Read CSV with proper column names
         df = pd.read_csv(imu_file)
         
-        # Convert GPS time to Unix timestamp
-        import gnss_lib_py as glp
+        # Get column names (they have spaces, so we need to handle carefully)
+        col_names = df.columns.tolist()
         
-        gps_weeks = df['GPSWeek'].values
-        gps_tows = df['GPSTime'].values
+        # Extract GPS time columns
+        gps_tow_col = [c for c in col_names if 'GPS TOW' in c][0]
+        gps_week_col = [c for c in col_names if 'GPS Week' in c][0]
         
-        # Convert to Unix timestamps
-        unix_ms = glp.tow_to_unix_millis(gps_weeks, gps_tows)
-        self.timestamps = unix_ms / 1000.0
+        # Extract acceleration columns
+        acc_x_col = [c for c in col_names if 'Acc X' in c][0]
+        acc_y_col = [c for c in col_names if 'Acc Y' in c][0]
+        acc_z_col = [c for c in col_names if 'Acc Z' in c][0]
+        
+        # Extract angular rate columns  
+        gyro_x_col = [c for c in col_names if 'Ang Rate X' in c][0]
+        gyro_y_col = [c for c in col_names if 'Ang Rate Y' in c][0]
+        gyro_z_col = [c for c in col_names if 'Ang Rate Z' in c][0]
+        
+        # Convert GPS time to timestamps
+        # GPS TOW is already in seconds, just store it directly
+        self.timestamps = df[gps_tow_col].values
         
         # Extract IMU measurements
-        self.accelerations = df[['ax', 'ay', 'az']].values
-        self.angular_velocities = df[['wx', 'wy', 'wz']].values
+        self.accelerations = df[[acc_x_col, acc_y_col, acc_z_col]].values
+        
+        # Convert angular velocities from deg/s to rad/s
+        deg2rad = np.pi / 180.0
+        self.angular_velocities = df[[gyro_x_col, gyro_y_col, gyro_z_col]].values * deg2rad
         
         # Store full dataframe for additional info
         self.imu_data = df
