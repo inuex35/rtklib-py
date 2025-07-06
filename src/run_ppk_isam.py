@@ -6,7 +6,7 @@ Maintains RTKLib structure but uses ISAM2 for filtering
 import sys, os, shutil
 
 # Set run parameters
-maxepoch = None  # Process all epochs
+maxepoch = 100  # Process 100 epochs
 trace_level = 3  # Debug trace level
 basepos = []     # Default to not specified here
 
@@ -98,8 +98,8 @@ try:
     print('Calculating solution with ISAM2 and IMU integration...\n')
     sol = procpos(nav, rov, base, fp_stat)
     
-    # Save solution to file
-    savesol(sol, solfile)
+    # Save solution to file (we're in the data directory now)
+    savesol(sol, rovfile[:-4] + '_isam.pos')
     fp_stat.close()
     
     print(f"\nProcessing complete!")
