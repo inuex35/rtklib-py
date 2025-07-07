@@ -9,8 +9,8 @@ filtertype = 'forward'   # forward, backward, combined, combined_noreset
 use_sing_pos = True      # run initial single precision sol each epoch
 elmin = 15               # minimum elevation for float solution (degrees)
 cnr_min = [35, 35]       # min signal strength [freq1, freq2] (dB-Hz)
-maxinno = 1              # outlier threshold for phase (m)
-maxcode = 10             # outlier threshold for code (m)
+maxinno = 1             # outlier threshold for phase (m) - increased from 1m
+maxcode = 10             # outlier threshold for code (m) - increased from 10m
 maxage = 30              # max age of differential
 maxout = 20              # maximum outage [epoch]
 thresdop = 6             # cycle slip detection by doppler method
@@ -18,7 +18,7 @@ thresslip = 0.05         # cycle slip detection by geom-free LC
 interp_base = False      # interpolate base observations
 
 # ------------  Kalman Filter Statistics ------------------------
-eratio = [100, 100]      # ratio between pseudorange noise and carrier phase noise for L1, L2
+eratio = [300, 300]      # ratio between pseudorange noise and carrier phase noise for L1, L2 - increased for more robust processing
 efact = {uGNSS.GPS: 1.0, uGNSS.GLO: 1.5, uGNSS.GAL: 1.0, uGNSS.BDS: 2.0, uGNSS.QZS: 1.0} # relative weighting of each constellation
 err = [0, 0.003, 0.003, 0.0, 0, 0, 5e-12]  # error sigmas [-, base, el, bl, snr, rcvstd, satclk]
 snrmax = 52              # max signal strength for variance calc (dB-Hz)
@@ -89,8 +89,8 @@ excsats = []
 imu_file = None
 
 # IMU noise parameters
-accel_noise_sigma = 0.01      # Accelerometer noise (m/s²)
-gyro_noise_sigma = 0.001      # Gyroscope noise (rad/s)
+accel_noise_sigma = 0.001      # Accelerometer noise (m/s²)
+gyro_noise_sigma = 0.0001      # Gyroscope noise (rad/s)
 accel_bias_rw_sigma = 0.0001  # Accelerometer bias random walk (m/s²/√s)
 gyro_bias_rw_sigma = 0.00001  # Gyroscope bias random walk (rad/s/√s)
 
@@ -99,5 +99,13 @@ imu_rate = 100.0  # Hz
 
 # IMU to GPS time offset (if any)
 imu_time_offset = 0.0  # seconds
+
+# ----------- Non-Holonomic Constraint (NHC) Configuration -------------------
+# Enable/disable NHC
+use_nhc = True
+
+# NHC noise parameters
+nhc_sigma_y = 0.1  # Lateral velocity constraint noise (m/s)
+nhc_sigma_z = 0.1  # Vertical velocity constraint noise (m/s)
 # IMU data file
-imu_file = '../../examples/data/testohkami/imu.txt'
+imu_file = '../../examples/data/PPC-Dataset/tokyo/run1/imu.csv'

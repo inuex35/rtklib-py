@@ -11,11 +11,11 @@ trace_level = 3  # Debug trace level
 basepos = []     # Default to not specified here
 
 # Specify input files for PPC-Dataset
-datadir = '../../examples/data/testohkami/'
+datadir = '../../examples/data/PPC-Dataset/tokyo/run1'
 navfile = 'base.nav'
 rovfile = 'rover.obs'
 basefile = 'base.obs'
-imufile = 'imu.txt'
+imufile = 'imu.csv'
 
 # Get script directory
 script_dir = os.path.dirname(os.path.abspath(__file__))

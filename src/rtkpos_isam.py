@@ -73,15 +73,15 @@ class RTKLibISAM2:
         # Check if IMU loader exists
         if hasattr(self.nav, 'imu_loader') and self.nav.imu_loader:
             # Get IMU noise parameters from config
-            accel_noise_sigma = getattr(cfg, 'accel_noise_sigma', 0.1)
-            gyro_noise_sigma = getattr(cfg, 'gyro_noise_sigma', 0.05)
-            accel_bias_rw_sigma = getattr(cfg, 'accel_bias_rw_sigma', 0.01)
-            gyro_bias_rw_sigma = getattr(cfg, 'gyro_bias_rw_sigma', 0.01)
+            accel_noise_sigma = getattr(cfg, 'accel_noise_sigma', 0.01)
+            gyro_noise_sigma = getattr(cfg, 'gyro_noise_sigma', 0.001)
+            accel_bias_rw_sigma = getattr(cfg, 'accel_bias_rw_sigma', 0.0001)
+            gyro_bias_rw_sigma = getattr(cfg, 'gyro_bias_rw_sigma', 0.0001)
             
             self.imu_params = gtsam.PreintegrationParams.MakeSharedU(9.81)
             self.imu_params.setAccelerometerCovariance(np.eye(3) * accel_noise_sigma**2)
             self.imu_params.setGyroscopeCovariance(np.eye(3) * gyro_noise_sigma**2)
-            self.imu_params.setIntegrationCovariance(np.eye(3) * 1e-3)
+            self.imu_params.setIntegrationCovariance(np.eye(3) * 1e-2)
             self.imu_params.setOmegaCoriolis(np.zeros(3))  # Ignore Earth rotation for now
             
             # Load IMU data
@@ -234,6 +234,35 @@ class RTKLibISAM2:
         self.graph.add(gtsam.BetweenFactorConstantBias(
             b_prev, b_curr, gtsam.imuBias.ConstantBias(), bias_noise))
             
+    def _add_nhc_factor(self):
+        """Add Non-Holonomic Constraint factor
+        
+        This constrains the vehicle to not move sideways or vertically in its body frame,
+        which is a valid assumption for ground vehicles.
+        """
+        if self.idx == 0:
+            return  # Need at least one previous state
+            
+        # Check if NHC is enabled
+        if not getattr(cfg, 'use_nhc', True):
+            return
+            
+        # Get NHC noise parameters from config
+        nhc_sigma_y = getattr(cfg, 'nhc_sigma_y', 0.1)  # Lateral velocity constraint
+        nhc_sigma_z = getattr(cfg, 'nhc_sigma_z', 0.1)  # Vertical velocity constraint
+        
+        # Create noise model for NHC (2D: y and z velocity constraints)
+        nhc_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([nhc_sigma_y, nhc_sigma_z]))
+        
+        # Add NHC factor
+        x_key = self._symbol('X', self.idx)
+        v_key = self._symbol('V', self.idx)
+        
+        nhc_factor = NonHolonomicConstraint(x_key, v_key, nhc_noise)
+        self.graph.add(nhc_factor)
+        
+        trace(3, f"Added NHC factor at idx {self.idx} with sigmas: y={nhc_sigma_y}, z={nhc_sigma_z}\n")
+            
     def _initialize_state(self, obsr):
         """Initialize state for first epoch"""
         # Get initial position from single point positioning
@@ -329,6 +358,9 @@ class RTKLibISAM2:
             
         # Add GNSS factors
         self._add_gnss_factors(obsr, obsb, rs, rsb, dts, dtsb, svh, svhb, var, varb)
+        
+        # Add NHC factor if enabled
+        self._add_nhc_factor()
         
         # Update ISAM2
         if self.graph.size() > 0:
@@ -439,6 +471,47 @@ class RTKLibISAM2:
         trace(3, f'Added {added} simple pseudorange factors\n')
 
 
+def gnss_pseudorange_error_func(residual, h_pos, h_clk, this, values, jacobians):
+    """Error function for GNSS pseudorange factor
+    
+    Args:
+        residual: Measurement residual
+        h_pos: Jacobian w.r.t position (3x1)
+        h_clk: Jacobian w.r.t clock
+        this: The factor instance
+        values: Current variable values
+        jacobians: Jacobian matrices (output)
+        
+    Returns:
+        Residual vector
+    """
+    # Get keys
+    keys = this.keys()
+    pose_key = keys[0]
+    clock_key = keys[1]
+    
+    # Get current estimates
+    pose = values.atPose3(pose_key)
+    clock = values.atVector(clock_key)[0]
+    
+    # Compute error
+    pos = pose.translation()
+    error = -residual + h_pos @ pos + h_clk * clock
+    
+    # Compute Jacobians if requested
+    if jacobians is not None:
+        # Jacobian w.r.t pose (6x1: 3 rotation, 3 translation)
+        J_pose = np.zeros((1, 6))
+        J_pose[0, 3:6] = h_pos  # Only translation part affects error
+        jacobians[0] = J_pose
+        
+        # Jacobian w.r.t clock (1x1)
+        J_clock = np.array([[h_clk]])
+        jacobians[1] = J_clock
+    
+    return np.array([error])
+
+
 class GNSSPseudorangeFactor(gtsam.CustomFactor):
     """Custom GNSS pseudorange factor"""
     
@@ -453,22 +526,76 @@ class GNSSPseudorangeFactor(gtsam.CustomFactor):
             h_clk: Jacobian w.r.t clock
             noise_model: Measurement noise model
         """
-        super().__init__(noise_model, [pose_key, clock_key])
-        self.residual = residual
-        self.h_pos = h_pos
-        self.h_clk = h_clk
+        # Create error function with bound parameters
+        error_func = lambda this, values, jacobians: gnss_pseudorange_error_func(
+            residual, h_pos, h_clk, this, values, jacobians
+        )
         
-    def error(self, values):
-        """Compute error given current values"""
-        pose = values.atPose3(self.keys()[0])
-        clock = values.atVector(self.keys()[1])[0]
+        # Initialize CustomFactor with noise model, keys, and error function
+        super().__init__(noise_model, [pose_key, clock_key], error_func)
+
+
+def nhc_error_func(this, values, jacobians):
+    """Error function for Non-Holonomic Constraint factor
+    
+    NHC assumes the vehicle cannot move sideways or vertically in its body frame.
+    This constrains velocity in the body y and z directions to be zero.
+    
+    Args:
+        this: The factor instance
+        values: Current variable values
+        jacobians: Jacobian matrices (output)
         
-        # Error is negative of residual (since residual = measurement - predicted)
-        # In Kalman filter: x_new = x_old + K*(y - h(x))
-        # In factor graph: we minimize ||h(x) - y||^2
-        pos = pose.translation()
-        error = -self.residual + self.h_pos @ pos + self.h_clk * clock
-        return np.array([error])
+    Returns:
+        Error vector [v_y, v_z] in body frame
+    """
+    # Get keys
+    keys = this.keys()
+    pose_key = keys[0]
+    vel_key = keys[1]
+    
+    # Get current estimates
+    pose = values.atPose3(pose_key)
+    vel_world = values.atVector(vel_key)
+    
+    # Transform velocity from world to body frame
+    R_world_to_body = pose.rotation().matrix().T
+    vel_body = R_world_to_body @ vel_world
+    
+    # Error is the y and z components of velocity in body frame
+    error = np.array([vel_body[1], vel_body[2]])  # v_y and v_z should be zero
+    
+    # Compute Jacobians if requested
+    if jacobians is not None:
+        # Jacobian w.r.t pose (2x6)
+        J_pose = np.zeros((2, 6))
+        # Rotation affects how world velocity maps to body frame
+        # This is complex, so we'll use numerical differentiation or set to zero for now
+        J_pose[:, 0:3] = 0  # Simplification: ignore rotation derivative
+        
+        # Jacobian w.r.t velocity (2x3)
+        # d(R^T * v) / dv = R^T
+        J_vel = R_world_to_body[1:3, :]  # Take y and z rows
+        
+        jacobians[0] = J_pose
+        jacobians[1] = J_vel
+    
+    return error
+
+
+class NonHolonomicConstraint(gtsam.CustomFactor):
+    """Non-Holonomic Constraint factor for ground vehicles"""
+    
+    def __init__(self, pose_key, vel_key, noise_model):
+        """Initialize NHC factor
+        
+        Args:
+            pose_key: Key for pose variable
+            vel_key: Key for velocity variable
+            noise_model: Measurement noise model (2D for y,z velocity constraints)
+        """
+        # Initialize CustomFactor with noise model, keys, and error function
+        super().__init__(noise_model, [pose_key, vel_key], nhc_error_func)
 
 
 def rtkpos_isam(nav, rov, base, fp_stat, dir=1):
