@@ -11,11 +11,11 @@ trace_level = 3  # Debug trace level
 basepos = []     # Default to not specified here
 
 # Specify input files for PPC-Dataset
-datadir = '../../examples/data/PPC-Dataset/tokyo/run1'
+datadir = '../../examples/data/testohkami/'
 navfile = 'base.nav'
 rovfile = 'rover.obs'
 basefile = 'base.obs'
-imufile = 'imu.csv'
+imufile = 'imu.txt'
 
 # Get script directory
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -42,7 +42,7 @@ solfile = os.path.join(datadir, rovfile[:-4] + '_isam.pos')
 statfile = os.path.join(datadir, rovfile[:-4] + '_isam.pos.stat')
 
 # Create output directory if it doesn't exist
-os.makedirs(datadir, exist_ok=True)
+#os.makedirs(datadir, exist_ok=True)
 
 # Setup trace output
 fp_stat = open(statfile, 'w')

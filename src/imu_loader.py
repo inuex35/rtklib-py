@@ -34,6 +34,13 @@ class ImuLoader:
         
         Expected format depends on dataset type
         """
+        # Set trace level if not already set
+        try:
+            from rtkcmn import tracelevel
+            tracelevel(3)
+        except:
+            pass
+            
         trace(3, f"Loading IMU data from: {imu_file}\n")
         
         if not Path(imu_file).exists():
@@ -48,6 +55,9 @@ class ImuLoader:
             # Check if PPC-Dataset format by looking for characteristic columns
             if 'GPS TOW' in header and 'GPS Week' in header:
                 self._load_ppc_dataset(imu_file)
+            elif ';' in header or imu_file.endswith('.txt'):
+                # Generic TXT format (semicolon separated)
+                self._load_generic_txt(imu_file)
             else:
                 # Generic CSV format
                 self._load_generic_csv(imu_file)
@@ -115,6 +125,72 @@ class ImuLoader:
         
         self.imu_data = df
         
+    def _load_generic_txt(self, imu_file):
+        """Load generic TXT IMU format (semicolon separated)
+        
+        Expected format: timestamp;acc_x;acc_y;acc_z;gyro_x;gyro_y;gyro_z;temperature
+        """
+        # Read the file manually to handle multi-line records
+        data_lines = []
+        with open(imu_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                # Skip header lines that start with '$'
+                if line.startswith('$'):
+                    continue
+                # Skip empty lines
+                if not line:
+                    continue
+                data_lines.append(line)
+        
+        # Parse the data lines
+        timestamps = []
+        accelerations = []
+        angular_velocities = []
+        
+        for line in data_lines:
+            try:
+                # Split by semicolon and handle potential line breaks
+                parts = line.split(';')
+                if len(parts) >= 7:
+                    timestamp = float(parts[0])
+                    acc_x = float(parts[1])
+                    acc_y = float(parts[2])
+                    acc_z = float(parts[3])
+                    gyro_x = float(parts[4])
+                    gyro_y = float(parts[5])
+                    gyro_z = float(parts[6])
+                    
+                    # Validate timestamp (should be reasonable Unix timestamp)
+                    if timestamp > 1e12:  # Skip if timestamp is too large
+                        trace(2, f"Skipping line with invalid timestamp: {timestamp}\n")
+                        continue
+                    
+                    timestamps.append(timestamp)
+                    accelerations.append([acc_x, acc_y, acc_z])
+                    angular_velocities.append([gyro_x, gyro_y, gyro_z])
+            except (ValueError, IndexError) as e:
+                trace(2, f"Error parsing line: {line[:50]}... Error: {e}\n")
+                continue
+        
+        # Convert to numpy arrays
+        self.timestamps = np.array(timestamps)
+        self.accelerations = np.array(accelerations)
+        self.angular_velocities = np.array(angular_velocities)
+        
+        # Create a simple dataframe for compatibility
+        self.imu_data = pd.DataFrame({
+            'timestamp': self.timestamps,
+            'acc_x': self.accelerations[:, 0],
+            'acc_y': self.accelerations[:, 1],
+            'acc_z': self.accelerations[:, 2],
+            'gyro_x': self.angular_velocities[:, 0],
+            'gyro_y': self.angular_velocities[:, 1],
+            'gyro_z': self.angular_velocities[:, 2]
+        })
+        
+        trace(3, f"Loaded {len(self.timestamps)} IMU measurements from TXT file\n")
+        
     def get_measurements_between(self, t_start, t_end):
         """Get IMU measurements between two timestamps
         
@@ -164,4 +240,12 @@ class ImuLoader:
             
         # Compute average time difference
         dt = np.mean(np.diff(self.timestamps))
-        return 1.0 / dt if dt > 0 else 100.0
+        if dt > 0:
+            return 1.0 / dt
+        else:
+            # Fallback: estimate from number of samples and time span
+            time_span = self.timestamps[-1] - self.timestamps[0]
+            if time_span > 0:
+                return len(self.timestamps) / time_span
+            else:
+                return 100.0  # Default
