@@ -438,7 +438,14 @@ def ddidx(nav, sats):
                 #     xxx=1
                 sys = nav.sysprn[sati][0]
                 # skip if sat not active
-                if nav.x[i] == 0.0  or sys != m or nav.vsat[sati-1,f] == 0:
+                if nav.x[i] == 0.0:
+                    trace(3, 'ddidx: sat %d freq %d skipped - nav.x[%d] == 0.0\n' % (sati, f+1, i))
+                    continue
+                if sys != m:
+                    trace(3, 'ddidx: sat %d freq %d skipped - sys %d != m %d\n' % (sati, f+1, sys, m))
+                    continue
+                if nav.vsat[sati-1,f] == 0:
+                    trace(3, 'ddidx: sat %d freq %d skipped - nav.vsat[%d,%d] == 0\n' % (sati, f+1, sati-1, f))
                     continue
                 if nav.lock[sati-1,f] >= 0 and nav.slip[sati-1,f] & 2 == 0 and \
                         nav.azel[sati-1,1] >= nav.elmaskar:

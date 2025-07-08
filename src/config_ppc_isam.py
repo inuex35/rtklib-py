@@ -30,7 +30,7 @@ sig_v0 = 10.0            # initial vel/acc sigma (m/sec)
 sig_n0 = 30.0            # initial bias sigma (m)
 
 #  -------------Ambiguity resolution options ----------------
-armode = 0               # 0:off, 1:continuous, 3:fix-and-hold (disabled for complex data)
+armode = 1               # 0:off, 1:continuous, 3:fix-and-hold (enabled for ambiguity resolution)
 thresar = 3              # AR threshold
 thresar1 = 0.1           # max pos variation for AR
 minlock = 0              # min consecutive fix samples to include sat in AR 

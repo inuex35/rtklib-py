@@ -102,11 +102,17 @@ class ImuLoader:
         self.timestamps = df[gps_tow_col].values + gps_leap_seconds
         
         # Extract IMU measurements
-        self.accelerations = df[[acc_x_col, acc_y_col, acc_z_col]].values
+        self.accelerations = df[[acc_x_col,acc_y_col, acc_z_col]].values
+        # Invert Y and Z axes
+        self.accelerations[:, 1] = -self.accelerations[:, 1]  # Invert Y
+        self.accelerations[:, 2] = -self.accelerations[:, 2]  # Invert Z
         
         # Convert angular velocities from deg/s to rad/s
         deg2rad = np.pi / 180.0
         self.angular_velocities = df[[gyro_x_col, gyro_y_col, gyro_z_col]].values * deg2rad
+        # Invert Y and Z axes
+        self.angular_velocities[:, 1] = -self.angular_velocities[:, 1]  # Invert Y
+        self.angular_velocities[:, 2] = -self.angular_velocities[:, 2]  # Invert Z
         
         # Store full dataframe for additional info
         self.imu_data = df

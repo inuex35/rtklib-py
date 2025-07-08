@@ -118,6 +118,12 @@ try:
         print(f"  Float solutions: {float_count} ({100*float_count/len(sol):.1f}%)")
         print(f"  Single solutions: {single_count} ({100*single_count/len(sol):.1f}%)")
         
+        # Print AR statistics if available
+        if hasattr(nav, 'ratio'):
+            print(f"\nAmbiguity Resolution:")
+            print(f"  Final AR ratio: {nav.ratio:.2f}")
+            print(f"  AR threshold: {nav.thresar:.2f}")
+        
 finally:
     # Return to original directory
     os.chdir(original_dir)
