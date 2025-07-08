@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test outputs
+*.trace
+*.pos
+*.pos.stat
+*.png
+*.html
+
+# Temporary config files
+__ppk_config.py
+__ppk_config_*.py
+
+# Test files
+test_*.py
+check_*.py
+compare_*.py
+
+# Backup files
+*_backup.py
+*_old.py
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db

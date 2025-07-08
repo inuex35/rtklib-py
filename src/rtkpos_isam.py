@@ -454,13 +454,13 @@ class RTKLibISAM2:
             unix_ms = (obsr.t.time + obsr.t.sec) * 1000.0
             gps_week, current_gps_tow = glp.unix_millis_to_tow(unix_ms)
             trace(4, f'GNSS epoch time: Unix={obsr.t.time + obsr.t.sec:.3f}, GPS Week={gps_week}, GPS TOW={current_gps_tow:.3f}\n')
-            #self._add_imu_factors(self.last_imu_time, current_gps_tow)
+            self._add_imu_factors(self.last_imu_time, current_gps_tow)
             
         # Add GNSS factors
         self._add_gnss_factors(obsr, obsb, rs, rsb, dts, dtsb, svh, svhb, var, varb)
         
         # Add NHC factor if enabled
-        #self._add_nhc_factor()
+        self._add_nhc_factor()
         
         # Attempt ambiguity resolution if we have carrier phase measurements
         # Note: Do this AFTER the update so we can check the current estimate
